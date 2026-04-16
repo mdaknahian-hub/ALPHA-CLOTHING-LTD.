@@ -1,0 +1,130 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: orders
+// Document ID: auto-generated
+// Fields:
+//   - buyer: string (required)
+//   - style: string (required)
+//   - poNo: string (required)
+//   - shipDate: string (required)
+//   - color: string (required)
+//   - orderQty: number (required)
+//
+// Collection: entries
+// Document ID: auto-generated
+// Fields:
+//   - date: string (required)
+//   - poNo: string (required)
+//   - color: string (required)
+//   - cut: number
+//   - sewOut: number
+//   - washR: number
+//   - finIn: number
+//   - finOut: number
+//   - poly: number
+//   - shipment: number
+//   - lineNo: string
+//   - floor: string (Woven/Knit)
+//   - violations: list
+//
+// Collection: users
+// Document ID: uid
+// Fields:
+//   - email: string (required)
+//   - role: string (admin/user)
+//   - lastLogin: string (ISO date)
+//
+// Collection: auditLogs
+// Document ID: auto-generated
+// Fields:
+//   - timestamp: string (required)
+//   - userId: string (required)
+//   - userEmail: string
+//   - action: string (ADD/EDIT/DELETE/LOGIN)
+//   - entity: string (ORDER/ENTRY/USER)
+//   - details: string
+//   - path: string
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      let role = get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return isAuthenticated() &&
+        (role == 'admin' || role == 'super-admin' ||
+          (request.auth.token.email == "aknahian@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasPermission(permission) {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return isAuthenticated() && 
+             (userData.role == 'admin' || userData.role == 'super-admin' || 
+              ('permissions' in userData && permission in userData.permissions));
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['buyer', 'style', 'poNo', 'shipDate', 'color', 'orderQty']) &&
+             data.buyer is string && data.buyer.size() < 100 &&
+             data.style is string && data.style.size() < 100 &&
+             data.poNo is string && data.poNo.size() < 100 &&
+             data.orderQty is number && data.orderQty >= 0;
+    }
+
+    function isValidEntry(data) {
+      return data.keys().hasAll(['date', 'poNo', 'color']) &&
+             data.date is string &&
+             data.poNo is string &&
+             data.color is string;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['timestamp', 'userId', 'action']) &&
+             data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAuthenticated();
+      allow create: if hasPermission('manage-orders') && isValidOrder(request.resource.data);
+      allow update: if hasPermission('manage-orders') && isValidOrder(request.resource.data);
+      allow delete: if hasPermission('manage-orders');
+    }
+
+    match /entries/{entryId} {
+      allow read: if isAuthenticated();
+      allow create: if hasPermission('add-entry') && isValidEntry(request.resource.data);
+      allow update: if hasPermission('edit-entry') && isValidEntry(request.resource.data);
+      allow delete: if hasPermission('delete-entry');
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
+      allow delete: if isAdmin();
+      allow update: if false;
+    }
+  }
+}

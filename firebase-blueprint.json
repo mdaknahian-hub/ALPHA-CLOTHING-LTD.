@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "Master order information",
+      "type": "object",
+      "properties": {
+        "buyer": { "type": "string" },
+        "style": { "type": "string" },
+        "poNo": { "type": "string" },
+        "shipDate": { "type": "string" },
+        "color": { "type": "string" },
+        "orderQty": { "type": "number" }
+      },
+      "required": ["buyer", "style", "poNo", "shipDate", "color", "orderQty"]
+    },
+    "ProductionEntry": {
+      "title": "Production Entry",
+      "description": "Daily production data",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "poNo": { "type": "string" },
+        "color": { "type": "string" },
+        "cut": { "type": "number" },
+        "sewOut": { "type": "number" },
+        "washR": { "type": "number" },
+        "finIn": { "type": "number" },
+        "finOut": { "type": "number" },
+        "poly": { "type": "number" },
+        "shipment": { "type": "number" },
+        "lineNo": { "type": "string" },
+        "floor": { "type": "string", "enum": ["Woven", "Knit", ""] },
+        "violations": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["date", "poNo", "color"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Application user profile",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["super-admin", "admin", "supervisor", "operator", "viewer"] },
+        "permissions": { 
+          "type": "array", 
+          "items": { "type": "string", "enum": ["view-data", "add-entry", "edit-entry", "delete-entry", "manage-orders", "download-pdf", "view-reports", "manage-users", "change-settings"] } 
+        },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "History of system changes. Admins can clear these logs.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string", "enum": ["ADD", "EDIT", "DELETE", "LOGIN"] },
+        "entity": { "type": "string", "enum": ["ORDER", "ENTRY", "USER"] },
+        "details": { "type": "string" },
+        "path": { "type": "string" }
+      },
+      "required": ["timestamp", "userId", "action"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of master orders"
+    },
+    "/entries/{entryId}": {
+      "schema": "ProductionEntry",
+      "description": "Collection of production entries"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and permissions"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System activity logs"
+    }
+  }
+}
