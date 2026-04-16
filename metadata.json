@@ -1,6 +1,6 @@
 {
-  "name": "ALPHA CLOTHING LTD. ",
-  "description": "A comprehensive Daily Production Report (DPR) and WIP management system with Firebase authentication, multi-user support, and activity history tracking.",
+  "name": "Alpha Clothing Production",
+  "description": "Daily Production Report (DPR) and WIP management system for Alpha Clothing Ltd. Features include real-time tracking, AI-powered reports, and Firebase integration.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

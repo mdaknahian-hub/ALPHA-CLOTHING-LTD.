@@ -51,7 +51,6 @@ const WIPReport = React.lazy(() => import('./components/WIPReport'));
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const OrderStatus = React.lazy(() => import('./components/OrderStatus'));
 const AdminPanel = React.lazy(() => import('./components/AdminPanel'));
-const AIAssistant = React.lazy(() => import('./components/AIAssistant'));
 import Login from './components/Login';
 
 export default function App() {
@@ -734,7 +733,6 @@ export default function App() {
               { id: 'dpr', label: 'DPR Report', icon: FileText, perm: 'view-data' },
               { id: 'wip', label: 'WIP Report', icon: BarChart3, perm: 'view-data' },
               { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data' },
-              { id: 'ai', label: 'AI Assistant', icon: Sparkles, perm: 'view-data' },
               userProfile?.role === 'admin' && { id: 'admin', label: 'Admin Panel', icon: Shield },
             ].filter(Boolean).map((tab: any) => {
               if (tab.perm && !hasPermission(tab.perm)) return null;
@@ -827,12 +825,6 @@ export default function App() {
                 orders={orders} 
                 entries={entries} 
                 getPOInfo={getPOInfo}
-              />
-            )}
-            {activeTab === 'ai' && (
-              <AIAssistant 
-                orders={orders} 
-                entries={entries} 
               />
             )}
             {activeTab === 'admin' && userProfile?.role === 'admin' && (

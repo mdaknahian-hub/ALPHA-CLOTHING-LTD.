@@ -44,10 +44,10 @@ export default function AIAssistant({ orders, entries }: AIAssistantProps) {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<'flash' | 'pro' | 'thinking'>('pro');
+  const [mode, setMode] = useState<'flash' | 'pro' | 'thinking'>('flash');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -86,6 +86,16 @@ TOTAL_RECORDS: Orders(${orders.length}), Entries(${entries.length})`;
     const prompt = overridePrompt || input;
     if (!prompt.trim() || isLoading) return;
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === '') {
+      setMessages(prev => [...prev, { 
+        role: 'model', 
+        text: "Error: AI API Key is missing. Please go to **Settings (Gear Icon) > Secrets** and ensure **GEMINI_API_KEY** is set. After setting it, please refresh the page.", 
+        type: 'general' 
+      }]);
+      return;
+    }
+
     const userMessage: Message = { role: 'user', text: prompt };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
@@ -122,26 +132,30 @@ TOTAL_RECORDS: Orders(${orders.length}), Entries(${entries.length})`;
       
       ${context}`;
 
-      let modelName = "gemini-3.1-pro-preview"; // Default to Pro for better data handling
-      let config: any = { systemInstruction };
+      let modelName = "gemini-3-flash-preview";
+      let config: any = { 
+        systemInstruction,
+        temperature: 0.7,
+      };
 
       if (mode === 'thinking') {
         config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
-      } else if (mode === 'flash') {
-        modelName = "gemini-3.1-flash-lite-preview";
+      } else if (mode === 'pro') {
+        modelName = "gemini-3.1-pro-preview";
       }
 
-      const chat = ai.chats.create({
+      const history = messages.filter(m => m.type !== 'report').map(m => ({ 
+        role: m.role, 
+        parts: [{ text: m.text }] 
+      }));
+
+      const response = await ai.models.generateContent({
         model: modelName,
-        config,
-        history: messages.filter(m => m.type !== 'report').map(m => ({ 
-          role: m.role, 
-          parts: [{ text: m.text }] 
-        }))
+        contents: [...history, { role: 'user', parts: [{ text: prompt }] }],
+        config
       });
 
-      const result = await chat.sendMessage({ message: prompt });
-      const responseText = result.text || "";
+      const responseText = response.text || "";
 
       // Try to parse JSON if it looks like a report
       const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || responseText.match(/{[\s\S]*?}/);
@@ -190,7 +204,7 @@ TOTAL_RECORDS: Orders(${orders.length}), Entries(${entries.length})`;
           </div>
           <div>
             <h2 className="text-sm font-bold text-fg">AI Production Assistant & Report Generator</h2>
-            <p className="text-[10px] text-muted font-medium uppercase tracking-wider">Powered by Gemini 3.1 Pro</p>
+            <p className="text-[10px] text-muted font-medium uppercase tracking-wider">Powered by Gemini 3.1</p>
           </div>
         </div>
         
