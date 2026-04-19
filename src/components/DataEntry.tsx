@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Keyboard, 
   Database, 
@@ -31,19 +31,29 @@ interface DataEntryProps {
 }
 
 export default function DataEntry({ orders, entries, getPOInfo, addToast, userProfile }: DataEntryProps) {
-  const [formData, setFormData] = useState({
-    date: format(new Date(), 'yyyy-MM-dd'),
-    poNo: '',
-    color: '',
-    cut: 0,
-    sewOut: 0,
-    washR: 0,
-    finIn: 0,
-    finOut: 0,
-    poly: 0,
-    shipment: 0,
-    lineNo: '',
-    floor: ''
+  const [formData, setFormData] = useState(() => {
+    const saved = localStorage.getItem('production_entry_autosave');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // Fallback if data is corrupted
+      }
+    }
+    return {
+      date: format(new Date(), 'yyyy-MM-dd'),
+      poNo: '',
+      color: '',
+      cut: 0,
+      sewOut: 0,
+      washR: 0,
+      finIn: 0,
+      finOut: 0,
+      poly: 0,
+      shipment: 0,
+      lineNo: '',
+      floor: ''
+    };
   });
 
   const hasPermission = (p: string) => {
@@ -52,7 +62,22 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
     return userProfile.permissions?.includes(p) || false;
   };
 
-  const [editingEntryId, setEditingEntryId] = useState<string | number | null>(null);
+  const [editingEntryId, setEditingEntryId] = useState<string | number | null>(() => {
+    const saved = localStorage.getItem('production_entry_editing_id');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('production_entry_autosave', JSON.stringify(formData));
+  }, [formData]);
+
+  useEffect(() => {
+    if (editingEntryId) {
+      localStorage.setItem('production_entry_editing_id', JSON.stringify(editingEntryId));
+    } else {
+      localStorage.removeItem('production_entry_editing_id');
+    }
+  }, [editingEntryId]);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
@@ -150,6 +175,8 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
       floor: ''
     });
     setEditingEntryId(null);
+    localStorage.removeItem('production_entry_autosave');
+    localStorage.removeItem('production_entry_editing_id');
   };
 
   const editEntry = (entry: ProductionEntry) => {
@@ -292,6 +319,29 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
 
   const uniquePOs = Array.from(new Set(orders.map(o => o.poNo)));
   const uniqueBuyers = Array.from(new Set(orders.map(o => o.buyer)));
+
+  const wipMap = useMemo(() => {
+    const map: Record<string, any> = {};
+    entries.forEach(e => {
+      const key = `${e.poNo}-${e.color}`;
+      if (!map[key]) {
+        map[key] = { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0 };
+      }
+      map[key].cut += e.cut || 0;
+      map[key].sewOut += e.sewOut || 0;
+      map[key].washR += e.washR || 0;
+      map[key].finIn += e.finIn || 0;
+      map[key].finOut += e.finOut || 0;
+      map[key].poly += e.poly || 0;
+    });
+    return map;
+  }, [entries]);
+
+  const getWIPClass = (val: number) => {
+    if (val > 500) return "bg-danger/20 text-danger font-black rounded px-1 min-w-[40px] inline-block text-center ring-1 ring-danger/30";
+    if (val > 200) return "bg-accent/10 text-accent font-bold px-1 rounded min-w-[40px] inline-block text-center";
+    return "text-muted/70 font-mono";
+  };
 
   return (
     <div className="space-y-6">
@@ -523,9 +573,12 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
                 <th>Floor</th>
                 <th>Cutting</th>
                 <th>Sew Out</th>
+                <th className="bg-bg2/30 text-[9px] uppercase">Sew WIP</th>
                 <th>Wash Recv</th>
+                <th className="bg-bg2/30 text-[9px] uppercase">Wash WIP</th>
                 <th>Fin In</th>
                 <th>Fin Out</th>
+                <th className="bg-bg2/30 text-[9px] uppercase">Fin WIP</th>
                 <th>Poly</th>
                 <th>Shipment</th>
                 <th>Ach%</th>
@@ -566,9 +619,24 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
                     <td className="text-[11px] text-success font-bold">{e.floor || '—'}</td>
                     <td className="num">{(e.cut || 0).toLocaleString()}</td>
                     <td className="num">{(e.sewOut || 0).toLocaleString()}</td>
+                    <td className="num bg-bg2/10">
+                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.cut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0))}>
+                        {((wipMap[`${e.poNo}-${e.color}`]?.cut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0)).toLocaleString()}
+                      </span>
+                    </td>
                     <td className="num">{(e.washR || 0).toLocaleString()}</td>
+                    <td className="num bg-bg2/10">
+                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.washR || 0))}>
+                        {((wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.washR || 0)).toLocaleString()}
+                      </span>
+                    </td>
                     <td className="num">{(e.finIn || 0).toLocaleString()}</td>
                     <td className="num">{(e.finOut || 0).toLocaleString()}</td>
+                    <td className="num bg-bg2/10">
+                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.finIn || 0) - (wipMap[`${e.poNo}-${e.color}`]?.finOut || 0))}>
+                        {((wipMap[`${e.poNo}-${e.color}`]?.finIn || 0) - (wipMap[`${e.poNo}-${e.color}`]?.finOut || 0)).toLocaleString()}
+                      </span>
+                    </td>
                     <td className="num text-success font-bold">{(e.poly || 0).toLocaleString()}</td>
                     <td className="num text-info font-bold">{(e.shipment || 0).toLocaleString()}</td>
                     <td className="num">

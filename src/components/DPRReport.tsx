@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { FileText, Printer, Filter, Tag, Calendar } from 'lucide-react';
+import { FileText, Download, Filter, Tag, Calendar } from 'lucide-react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry, POInfo } from '../types';
 import { format, parseISO } from 'date-fns';
+import * as XLSX from 'xlsx';
 
 interface DPRReportProps {
   orders: Order[];
@@ -74,8 +75,54 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
 
   const uniqueBuyers = Array.from(new Set(orders.map(o => o.buyer)));
 
-  const handlePrint = () => {
-    window.print();
+  const handleDownload = () => {
+    const header = [
+      ["ALPHA CLOTHING LTD."],
+      ["DAILY PRODUCTION REPORT (DPR)"],
+      [`Date: ${reportDate}`],
+      [`Address: Tenguri, BKSP, Ashulia, Savar, Dhaka`],
+      [`Generated At: ${format(new Date(), 'dd MMM yyyy HH:mm:ss')}`],
+      []
+    ];
+
+    const colHeaders = [
+      "Buyer", "Style", "PO No", "Ship Date", "Color", "Line No", "Floor", 
+      "Order Qty", "Cutting", "Sewing", "Wash Recv", "Fin Input", "Fin Output", "Poly", "Shipment", "Ach %"
+    ];
+
+    const rows: any[] = [];
+    reportData.forEach(group => {
+      group.entries.forEach(e => {
+        const info = getPOInfo(e.poNo);
+        const colorRow = info?.colorRows.find(r => r.color === e.color);
+        const ach = colorRow?.orderQty ? ((e.poly || 0) / colorRow.orderQty) * 100 : 0;
+        
+        rows.push([
+          group.buyer, 
+          group.style, 
+          e.poNo, 
+          info?.shipDate || '', 
+          e.color, 
+          e.lineNo || '', 
+          e.floor || '',
+          colorRow?.orderQty || 0,
+          e.cut || 0,
+          e.sewOut || 0,
+          e.washR || 0,
+          e.finIn || 0,
+          e.finOut || 0,
+          e.poly || 0,
+          e.shipment || 0,
+          ach.toFixed(1) + '%'
+        ]);
+      });
+    });
+
+    const finalData = [...header, colHeaders, ...rows];
+    const worksheet = XLSX.utils.aoa_to_sheet(finalData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "DPR Report");
+    XLSX.writeFile(workbook, `DPR_${reportDate}.xlsx`);
   };
 
   return (
@@ -106,15 +153,12 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
             <option value="">All Buyers</option>
             {uniqueBuyers.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
-          <button className="btn btn-p" onClick={handlePrint}>
-            <Printer size={14} /> Print Report
-          </button>
         </div>
       </div>
 
       <div className="bg-bg2/50 backdrop-blur-xl border border-border rounded-2xl p-8 shadow-2xl max-w-[1400px] mx-auto print:shadow-none print:border-none print:p-0 ring-1 ring-white/5">
         <div className="text-center space-y-2 mb-10">
-          <h1 className="text-3xl font-black tracking-tighter text-fg no-print bg-gradient-to-r from-fg to-muted bg-clip-text text-transparent">ALPHA CLOTHING LTD</h1>
+          <h1 className="text-3xl font-black tracking-tighter text-fg no-print bg-gradient-to-r from-fg to-muted bg-clip-text text-transparent">ALPHA CLOTHING LTD.</h1>
           <div className="inline-flex items-center gap-3 px-6 py-2 bg-accent/10 rounded-2xl border border-accent/20 print:bg-transparent print:border-none print:p-0">
             <div className="w-2 h-2 rounded-full bg-accent animate-pulse no-print" />
             <p className="text-[14px] font-black text-accent uppercase tracking-[0.2em] print:text-fg print:text-sm">

@@ -5,7 +5,7 @@ import {
   Filter, 
   Calendar, 
   Tag, 
-  Box, 
+  Box as BoxIcon, 
   Activity, 
   TrendingUp,
   ChevronRight,
@@ -22,9 +22,10 @@ interface OrderStatusProps {
   orders: Order[];
   entries: ProductionEntry[];
   getPOInfo: (poNo: string) => POInfo | null;
+  poColorAggregates?: Record<string, any>;
 }
 
-export default function OrderStatus({ orders, entries, getPOInfo }: OrderStatusProps) {
+export default function OrderStatus({ orders, entries, getPOInfo, poColorAggregates = {} }: OrderStatusProps) {
   const [filters, setFilters] = useState({
     poNo: '',
     buyer: '',
@@ -78,11 +79,12 @@ export default function OrderStatus({ orders, entries, getPOInfo }: OrderStatusP
         };
       }
       
-      const poEntries = entries.filter(e => e.poNo === o.poNo && e.color === o.color);
-      const poly = poEntries.reduce((s, e) => s + (e.poly || 0), 0);
-      const shipment = poEntries.reduce((s, e) => s + (e.shipment || 0), 0);
-      const sewOut = poEntries.reduce((s, e) => s + (e.sewOut || 0), 0);
-      const cut = poEntries.reduce((s, e) => s + (e.cut || 0), 0);
+      const pcKey = `${o.poNo}-${o.color}`;
+      const agg = poColorAggregates[pcKey] || { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0, shipment: 0 };
+      const poly = agg.poly;
+      const shipment = agg.shipment;
+      const sewOut = agg.sewOut;
+      const cut = agg.cut;
 
       groups[o.style].orderQty += o.orderQty;
       groups[o.style].poly += poly;
@@ -331,7 +333,7 @@ export default function OrderStatus({ orders, entries, getPOInfo }: OrderStatusP
                     <div className="p-4 bg-bg2/20">
                       <div className="flex justify-between items-center mb-4">
                         <h4 className="text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                          <Box size={14} className="text-accent" />
+                          <BoxIcon size={14} className="text-accent" />
                           PO Wise Details for {group.style}
                         </h4>
                         <button 

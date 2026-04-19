@@ -95,6 +95,19 @@ service cloud.firestore {
              data.userId == request.auth.uid;
     }
 
+    function isValidFinishingEntry(data) {
+      return data.keys().hasAll(['date', 'style', 'poNo', 'color', 'lineNo', 'input', 'output', 'userId', 'createdAt', 'orderQty']) &&
+             data.date is string &&
+             data.style is string &&
+             data.poNo is string &&
+             data.color is string &&
+             data.lineNo is string &&
+             data.input is number &&
+             data.output is number &&
+             data.orderQty is number &&
+             data.userId == request.auth.uid;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -117,6 +130,13 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if hasPermission('add-entry') && isValidEntry(request.resource.data);
       allow update: if hasPermission('edit-entry') && isValidEntry(request.resource.data);
+      allow delete: if hasPermission('delete-entry');
+    }
+
+    match /finishing_tracking/{entryId} {
+      allow read: if isAuthenticated();
+      allow create: if hasPermission('add-entry') && isValidFinishingEntry(request.resource.data);
+      allow update: if hasPermission('edit-entry') && isValidFinishingEntry(request.resource.data);
       allow delete: if hasPermission('delete-entry');
     }
 

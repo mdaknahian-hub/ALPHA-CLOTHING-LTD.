@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { X, FileUp, AlertCircle, Database, Calendar, History } from 'lucide-react';
+import { X, FileUp, AlertCircle, Database, Calendar, History as HistoryIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { format, parseISO, parse, isValid, subDays } from 'date-fns';
 import { Order, ProductionEntry } from '../types';
@@ -17,9 +17,31 @@ export default function HistoricalImportModal({ onClose, onSave, orders }: Histo
   const [parsedData, setParsedData] = useState<(Omit<ProductionEntry, 'id'> & { style: string; error?: string })[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [headerMap, setHeaderMap] = useState<Record<string, number>>({});
+
+  const commonHeaderMaps: Record<string, string[]> = {
+    style: ['style', 'style no', 'style#', 'item', 'model'],
+    poNo: ['po no', 'po number', 'po#', 'order id', 'order no', 'purchase order'],
+    color: ['color', 'colour', 'shade'],
+    cut: ['cut qty', 'cutting', 'cut', 'total cut'],
+    sewOut: ['sewing qty', 'sewing output', 'sew out', 'sew qty', 'output qty', 'sewing'],
+    washR: ['wash rec', 'wash received', 'received wash', 'wash r', 'wash recv'],
+    finIn: ['fin in', 'finish input', 'finishing input', 'total input', 'input'],
+    finOut: ['fin out', 'finish output', 'finishing output', 'total output', 'output'],
+    poly: ['poly', 'total poly', 'total packing', 'packing'],
+  };
+
+  const findHeaderIndex = (headers: string[], targetKeys: string[]) => {
+    return headers.findIndex(h => {
+      const normalizedHeader = h.toLowerCase().trim();
+      return targetKeys.some(key => normalizedHeader.includes(key.toLowerCase()));
+    });
+  };
 
   const handleParse = () => {
     const lines = rawText.split('\n').filter(l => l.trim());
+    if (lines.length === 0) return;
+
     const results: (Omit<ProductionEntry, 'id'> & { style: string; error?: string })[] = [];
     const errs: string[] = [];
     
@@ -29,65 +51,84 @@ export default function HistoricalImportModal({ onClose, onSave, orders }: Histo
       return;
     }
 
-    lines.forEach((line, idx) => {
-      const parts = line.split('\t').map(p => p.trim());
-      
-      // Mapping based on user's Excel screenshot:
-      // 0: STYLE
-      // 1: PO NO
-      // 2: SHIP DATE
-      // 3: COLOR
-      // 4: ORDER QTY
-      // 5: CUT QTY
-      // 6: CUY %
-      // 7: SEWING QTY
-      // 8: SEWING WIP
-      // 9: WASH REC
-      // 10: WASH WIP
-      // 11: TOTAL INPUT (Fin In)
-      // 12: TOTAL OUTPUT (Fin Out)
-      // 13: TOTAL POLY
-      
-      if (parts.length < 6) return; 
+    // Attempt to detect headers from the first few lines
+    let dataStartIdx = 0;
+    let detectedMap: Record<string, number> = {};
 
-      const style = parts[0];
-      const poNo = parts[1];
-      const color = parts[3];
-      const cutStr = parts[5];
-      const sewStr = parts[7];
-      const washStr = parts[9];
-      const finInStr = parts[11];
-      const finOutStr = parts[12];
-      const polyStr = parts[13];
+    // Check if the first line is a header row
+    const firstLineParts = lines[0].split(/\t+|\s{2,}/).map(p => p.trim()).filter(p => p !== '');
+    const isHeaderCandidate = firstLineParts.some(p => 
+      ['style', 'po', 'color', 'qty', 'cut', 'sew'].some(key => p.toLowerCase().includes(key))
+    );
+
+    if (isHeaderCandidate) {
+      Object.entries(commonHeaderMaps).forEach(([key, aliases]) => {
+        const idx = findHeaderIndex(firstLineParts, aliases);
+        if (idx !== -1) detectedMap[key] = idx;
+      });
+      dataStartIdx = 1;
+      setHeaderMap(detectedMap);
+    } else {
+      // Use standard mapping if no header detected
+      detectedMap = {
+        style: 0, poNo: 1, color: 3, cut: 5, sewOut: 7, washR: 9, finIn: 11, finOut: 13, poly: 16
+      };
+      setHeaderMap({});
+    }
+
+    const dataLines = lines.slice(dataStartIdx);
+
+    dataLines.forEach((line, idx) => {
+      const parts = line.split(/\t+|\s{2,}/).map(p => p.trim()).filter(p => p !== '');
       
-      // Skip header or total rows
-      if (style.toLowerCase() === 'style' || poNo.toLowerCase() === 'po no' || !style || !poNo || !color) return;
-      if (isNaN(Number(poNo)) && poNo.length < 5) return; // Skip sub-total rows
+      const getVal = (key: string) => {
+        const index = detectedMap[key];
+        return index !== undefined ? parts[index] : '';
+      };
+
+      const style = getVal('style');
+      const poNo = getVal('poNo');
+      const color = getVal('color');
+      
+      if (!style && !poNo) return;
+
+      // Skip summary rows
+      if (style?.toLowerCase().includes('style') || 
+          poNo?.toLowerCase().includes('po no') || 
+          poNo?.toLowerCase().includes('total') ||
+          style?.toLowerCase() === 'total' ||
+          !style || !poNo) return;
+
+      const cutStr = getVal('cut');
+      const sewStr = getVal('sewOut');
+      const washStr = getVal('washR');
+      const finInStr = getVal('finIn');
+      const finOutStr = getVal('finOut');
+      const polyStr = getVal('poly');
 
       let rowError = '';
       
-      // Find matching order
       const matchingOrder = orders.find(o => 
-        o.poNo === poNo && 
+        String(o.poNo).toLowerCase() === String(poNo).toLowerCase() && 
         o.color.toLowerCase() === color.toLowerCase() &&
         o.style.toLowerCase() === style.toLowerCase()
       );
 
       if (!matchingOrder) {
-        rowError = `Order not found (Style: ${style}, PO: ${poNo}, Color: ${color})`;
-        errs.push(`Row ${idx + 1}: ${rowError}`);
+        rowError = `Order missing: PO ${poNo}, Color ${color}`;
+        errs.push(`Row ${idx + 2}: ${rowError} (Create Order first)`);
       }
 
       const parseNum = (s: string) => {
         if (!s) return 0;
-        const n = Number(s.replace(/,/g, '').replace(/%/g, ''));
+        const n = Number(String(s).replace(/,/g, '').replace(/%/g, '').replace(/[()]/g, ''));
         return isNaN(n) ? 0 : n;
       };
 
       const entry: Omit<ProductionEntry, 'id'> & { style: string; error?: string } = {
         date: startDate,
-        poNo,
-        color,
+        poNo: String(poNo),
+        color: color || 'N/A',
         style,
         cut: parseNum(cutStr),
         sewOut: parseNum(sewStr),
@@ -132,7 +173,7 @@ export default function HistoricalImportModal({ onClose, onSave, orders }: Histo
       >
         <div className="flex items-center justify-between p-4 border-b border-border bg-bg2">
           <h3 className="text-base font-bold flex items-center gap-2">
-            <History size={18} className="text-accent" />
+            <HistoryIcon size={18} className="text-accent" />
             Historical Data Import (Opening Balance)
           </h3>
           <button onClick={onClose} className="text-muted hover:text-fg">
@@ -160,13 +201,23 @@ export default function HistoricalImportModal({ onClose, onSave, orders }: Histo
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider flex items-center gap-2">
                   <Database size={12} /> 2. Paste Excel Data *
                 </label>
-                <p className="text-[10px] text-muted italic mb-2">
-                  Required Columns (Copy from Excel):<br/>
-                  <span className="text-accent font-bold">STYLE, PO NO, SHIP DATE, COLOR, ORDER QTY, CUT QTY, CUY %, SEWING QTY, SEW-WIP, WASH-REC, WASH-WIP, FIN-IN, FIN-OUT, POLY</span>
-                </p>
+                <div className="p-3 bg-accent/5 border border-accent/20 rounded-lg space-y-2">
+                  <p className="text-[10px] text-muted leading-relaxed">
+                    <span className="text-accent font-bold">✨ Smart Mapping:</span> Paste your data <span className="underline">including the header row</span>. The app will automatically find Cut, Sewing, Wash, Finishing, and Poly columns regardless of order.
+                  </p>
+                  {Object.keys(headerMap).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.keys(headerMap).map(key => (
+                        <span key={key} className="px-1.5 py-0.5 bg-accent/10 text-accent rounded text-[9px] font-bold uppercase ring-1 ring-accent/20">
+                          {key} ✓
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <textarea 
-                  className="fi min-h-[250px] font-mono text-[10px] leading-relaxed"
-                  placeholder="Paste rows from Excel here..."
+                  className="fi min-h-[300px] font-mono text-[10px] leading-relaxed"
+                  placeholder="Paste rows (with headers) directly from your Excel Sheet..."
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
                 />

@@ -10,7 +10,9 @@ import {
   BarChart3, 
   LayoutDashboard,
   Clock,
+  Activity,
   Plus,
+  ArrowRightLeft,
   Trash2,
   Pencil,
   Filter,
@@ -22,7 +24,7 @@ import {
   InfoIcon,
   AlertTriangle,
   Shirt,
-  Box,
+  Box as BoxIcon,
   Target,
   Shield,
   ClipboardList,
@@ -32,7 +34,9 @@ import {
   Sun,
   Moon,
   Download,
-  Sparkles
+  Sparkles,
+  FileSpreadsheet,
+  Settings2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay, differenceInCalendarDays } from 'date-fns';
@@ -49,8 +53,12 @@ const DataEntry = React.lazy(() => import('./components/DataEntry'));
 const DPRReport = React.lazy(() => import('./components/DPRReport'));
 const WIPReport = React.lazy(() => import('./components/WIPReport'));
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
-const OrderStatus = React.lazy(() => import('./components/OrderStatus'));
-const AdminPanel = React.lazy(() => import('./components/AdminPanel'));
+const StatusReport = React.lazy(() => import('./components/OrderStatus'));
+const SettingsModule = React.lazy(() => import('./components/SettingsModule'));
+const SystemHealth = React.lazy(() => import('./components/SystemHealth'));
+const FinishingTracker = React.lazy(() => import('./components/FinishingTracker'));
+const ReportBuilder = React.lazy(() => import('./components/ReportBuilder'));
+const AboutSection = React.lazy(() => import('./components/AboutSection'));
 import Login from './components/Login';
 
 export default function App() {
@@ -58,14 +66,26 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<{ role: string; permissions?: string[]; status?: string } | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [entries, setEntries] = useState<ProductionEntry[]>([]);
-  const [activeTab, setActiveTab] = useState('master');
+  const [activeTab, setActiveTab] = useState('dash');
+  const [appSettings, setAppSettings] = useState({
+    primaryColor: '#f59e0b',
+    fontSize: 'md',
+    fontFamily: 'Inter, ui-sans-serif, system-ui',
+    navPosition: 'top',
+    compactMode: false
+  });
   const [toasts, setToasts] = useState<{ id: number; msg: string; type: 'ok' | 'er' | 'in' }[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
   const [isDownloadOpen, setIsDownloadOpen] = useState(false);
+  const [time, setTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   
   // --- Memoized PO Lookup Map ---
   const poLookupMap = useMemo(() => {
@@ -95,6 +115,34 @@ export default function App() {
   const getPOInfo = (poNo: string): POInfo | null => {
     return poLookupMap.get(poNo) || null;
   };
+
+  // --- Memoized Aggregates for Performance ---
+  const aggregates = useMemo(() => {
+    const poMap: Record<string, any> = {};
+    const poColorMap: Record<string, any> = {};
+
+    entries.forEach(e => {
+      const pKey = e.poNo;
+      const pcKey = `${e.poNo}-${e.color}`;
+
+      [pKey, pcKey].forEach((key, idx) => {
+        const targetMap = idx === 0 ? poMap : poColorMap;
+        if (!targetMap[key]) {
+          targetMap[key] = { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0, shipment: 0 };
+        }
+        const m = targetMap[key];
+        m.cut += (e.cut || 0);
+        m.sewOut += (e.sewOut || 0);
+        m.washR += (e.washR || 0);
+        m.finIn += (e.finIn || 0);
+        m.finOut += (e.finOut || 0);
+        m.poly += (e.poly || 0);
+        m.shipment += (e.shipment || 0);
+      });
+    });
+
+    return { poMap, poColorMap };
+  }, [entries]);
 
   const toastCounter = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -126,73 +174,21 @@ export default function App() {
 
   // --- Initialization ---
   useEffect(() => {
-    const savedTheme = localStorage.getItem('acl_theme') as 'dark' | 'light';
-    if (savedTheme) {
-      setTheme(savedTheme);
-      if (savedTheme === 'light') document.documentElement.classList.add('light');
+    const savedSettings = localStorage.getItem('acl_settings');
+    if (savedSettings) {
+      const parsed = JSON.parse(savedSettings);
+      setAppSettings(parsed);
+      // Apply saved settings
+      document.documentElement.style.setProperty('--color-accent', parsed.primaryColor);
+      document.documentElement.style.setProperty('--font-sans', parsed.fontFamily);
+      document.documentElement.style.fontSize = parsed.fontSize === 'sm' ? '14px' : parsed.fontSize === 'lg' ? '18px' : '16px';
     }
   }, []);
 
-  // --- Firestore Listeners ---
-  useEffect(() => {
-    if (!user) {
-      setOrders([]);
-      setEntries([]);
-      return;
-    }
-
-    const qOrders = query(collection(db, 'orders'));
-    const unsubOrders = onSnapshot(qOrders, (snapshot) => {
-      const ordersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
-      setOrders(ordersData);
-      setIsLoaded(true);
-    });
-
-    const qEntries = query(collection(db, 'entries'), orderBy('date', 'desc'));
-    const unsubEntries = onSnapshot(qEntries, (snapshot) => {
-      const entriesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
-      setEntries(entriesData);
-    });
-
-    return () => {
-      unsubOrders();
-      unsubEntries();
-    };
-  }, [user]);
-
-  // --- Auth State ---
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (userDoc.exists()) {
-          const data = userDoc.data() as { role: string; permissions?: string[]; status?: string };
-          if (data.status === 'suspended') {
-            await signOut(auth);
-            addToast('Your account has been suspended. Please contact admin.', 'er');
-            setUserProfile(null);
-            setUser(null);
-          } else {
-            setUserProfile(data);
-          }
-        }
-      } else {
-        setUserProfile(null);
-      }
-      setIsAuthReady(true);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // --- Initialization ---
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('acl_theme') as 'dark' | 'light';
-    if (savedTheme) {
-      setTheme(savedTheme);
-      if (savedTheme === 'light') document.documentElement.classList.add('light');
-    }
-  }, []);
+  const updateAppSettings = (newSettings: any) => {
+    setAppSettings(newSettings);
+    localStorage.setItem('acl_settings', JSON.stringify(newSettings));
+  };
 
   // --- Firestore Listeners ---
   useEffect(() => {
@@ -262,8 +258,10 @@ export default function App() {
     addToast('Generating Professional PDF...', 'in');
     
     try {
-      const html2canvas = (await import('html2canvas')).default;
-      const { jsPDF } = await import('jspdf');
+      const html2canvasMod = await import('html2canvas');
+      const html2canvas = (html2canvasMod.default || html2canvasMod) as any;
+      const jspdfMod = await import('jspdf');
+      const jsPDFConstructor = (jspdfMod.jsPDF || (jspdfMod as any).default || jspdfMod) as any;
       
       const element = contentRef.current;
       const reportDate = format(new Date(), 'dd-MMM-yy');
@@ -290,18 +288,35 @@ export default function App() {
 
       // Professional Header
       const header = document.createElement('div');
-      header.style.borderBottom = '2px solid #000';
-      header.style.marginBottom = '20px';
-      header.style.paddingBottom = '15px';
+      header.style.background = '#f8fafc';
+      header.style.borderBottom = '3px solid #f59e0b';
+      header.style.marginBottom = '25px';
+      header.style.padding = '25px';
+      header.style.borderRadius = '12px';
       header.style.textAlign = 'center';
       header.style.fontFamily = 'Arial, sans-serif';
+      header.style.position = 'relative';
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.justifyContent = 'space-between';
       header.innerHTML = `
-        <h1 style="font-size: 26px; font-weight: 900; margin: 0; color: #000;">ALPHA CLOTHING LTD.</h1>
-        <p style="font-size: 10px; font-weight: bold; margin: 2px 0; color: #000;">TENGURI, BKSP, ASHULIA, SAVAR, DHAKA</p>
-        <h2 style="font-size: 16px; font-weight: bold; margin: 10px 0; color: #000; text-decoration: underline;">${activeTab.toUpperCase()} REPORT</h2>
-        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 9px; font-weight: bold; border-top: 1px solid #eee; padding-top: 5px;">
-          <span>PREPARED BY: ${user?.email?.toUpperCase() || 'SYSTEM'}</span>
-          <span>DATE: ${reportDate} | TIME: ${reportTime}</span>
+        <div style="display: flex; align-items: center; gap: 20px;">
+          <img src="/logo-2.png" 
+               style="width: 80px; height: 80px; object-fit: contain; border-radius: 12px; background: #020617; padding: 5px; border: 2px solid #f59e0b;" 
+               referrerPolicy="no-referrer"
+               onError="this.src='/logo.png'" />
+          <div style="text-align: left;">
+            <h1 style="font-size: 28px; font-weight: 900; margin: 0; color: #0f172a; letter-spacing: -0.5px;">ALPHA CLOTHING LTD.</h1>
+            <p style="font-size: 11px; font-weight: 800; margin: 2px 0; color: #f59e0b; text-transform: uppercase; letter-spacing: 2px;">The Best Look Anytime Anywhere</p>
+            <p style="font-size: 10px; font-weight: bold; margin: 0; color: #64748b;">Tenguri, BKSP, Ashulia, Savar, Dhaka</p>
+          </div>
+        </div>
+        <div style="text-align: right;">
+          <h2 style="font-size: 18px; font-weight: 900; margin: 0; color: #020617; text-transform: uppercase; letter-spacing: 1px;">${activeTab.replace('-', ' ').toUpperCase()} REPORT</h2>
+          <div style="margin-top: 8px; font-size: 9px; color: #64748b; font-weight: bold;">
+            <div style="color: #020617;">PREPARED BY: ${user?.email?.toUpperCase() || 'SYSTEM'}</div>
+            <div>DATE: ${reportDate} | TIME: ${reportTime}</div>
+          </div>
         </div>
       `;
       reportWrapper.appendChild(header);
@@ -313,20 +328,41 @@ export default function App() {
       const allElements = clone.querySelectorAll('*');
       allElements.forEach((el: any) => {
         el.style.backgroundColor = 'transparent';
-        el.style.color = '#000';
-        el.style.borderColor = '#000';
+        el.style.color = '#020617';
+        el.style.borderColor = '#e2e8f0';
         el.style.boxShadow = 'none';
-        if (el.tagName === 'BUTTON' || el.classList.contains('no-print') || el.classList.contains('btn')) {
+        
+        if (el.tagName === 'BUTTON' || el.classList.contains('no-print') || el.classList.contains('btn') || el.tagName === 'NAV') {
           el.style.display = 'none';
         }
+        
         if (el.tagName === 'TABLE') {
           el.style.width = '100%';
-          el.style.borderCollapse = 'collapse';
+          el.style.borderCollapse = 'separate';
+          el.style.borderSpacing = '0';
+          el.style.marginTop = '10px';
+          el.style.borderRadius = '8px';
+          el.style.overflow = 'hidden';
+          el.style.border = '1px solid #e2e8f0';
         }
-        if (el.tagName === 'TD' || el.tagName === 'TH') {
-          el.style.border = '1px solid #000';
-          el.style.padding = '4px';
+        
+        if (el.tagName === 'TH') {
+          el.style.backgroundColor = '#f1f5f9';
+          el.style.color = '#020617';
+          el.style.borderBottom = '2px solid #f59e0b';
+          el.style.padding = '12px 8px';
+          el.style.fontSize = '10px';
+          el.style.fontWeight = '900';
+          el.style.textTransform = 'uppercase';
         }
+        
+        if (el.tagName === 'TD') {
+          el.style.borderBottom = '1px solid #f1f5f9';
+          el.style.padding = '10px 8px';
+          el.style.fontSize = '10px';
+          el.style.fontWeight = '500';
+        }
+
         if (el.classList.contains('overflow-x-auto') || el.classList.contains('max-h-[60vh]')) {
           el.style.maxHeight = 'none';
           el.style.overflow = 'visible';
@@ -334,16 +370,63 @@ export default function App() {
       });
 
       // Capture Header
-      const headerCanvas = await html2canvas(header, { scale: 2, backgroundColor: '#fff' });
+      const headerCanvas = await html2canvas(header, { 
+        scale: 2, 
+        backgroundColor: '#fff',
+        onclone: (clonedDoc) => {
+          const elements = clonedDoc.getElementsByTagName('*');
+          for (let i = 0; i < elements.length; i++) {
+            const el = elements[i] as HTMLElement;
+            const computed = window.getComputedStyle(el);
+            const props = ['backgroundColor', 'color', 'borderColor', 'outlineColor', 'fill', 'stroke'];
+            props.forEach(p => {
+              const val = (computed as any)[p];
+              if (val && (val.includes('oklab') || val.includes('oklch'))) {
+                (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
+              }
+              if (el.style) {
+                const inlineVal = (el.style as any)[p];
+                if (inlineVal && (inlineVal.includes('oklab') || inlineVal.includes('oklch'))) {
+                  (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
+                }
+              }
+            });
+          }
+        }
+      });
       const headerImg = headerCanvas.toDataURL('image/jpeg', 1.0);
 
       // Capture Content
-      const contentCanvas = await html2canvas(clone, { scale: 2, backgroundColor: '#fff', useCORS: true });
+      const contentCanvas = await html2canvas(clone, { 
+        scale: 2, 
+        backgroundColor: '#fff', 
+        useCORS: true,
+        onclone: (clonedDoc) => {
+          const elements = clonedDoc.getElementsByTagName('*');
+          for (let i = 0; i < elements.length; i++) {
+            const el = elements[i] as HTMLElement;
+            const computed = window.getComputedStyle(el);
+            const props = ['backgroundColor', 'color', 'borderColor', 'outlineColor', 'fill', 'stroke'];
+            props.forEach(p => {
+              const val = (computed as any)[p];
+              if (val && (val.includes('oklab') || val.includes('oklch'))) {
+                (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
+              }
+              if (el.style) {
+                const inlineVal = (el.style as any)[p];
+                if (inlineVal && (inlineVal.includes('oklab') || inlineVal.includes('oklch'))) {
+                  (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
+                }
+              }
+            });
+          }
+        }
+      });
       const contentImg = contentCanvas.toDataURL('image/jpeg', 1.0);
       
       document.body.removeChild(container);
 
-      const pdf = new jsPDF(orientation, 'mm', 'a4');
+      const pdf = new (jsPDFConstructor as any)(orientation, 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
@@ -582,7 +665,6 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setIsAdminUnlocked(false);
       addToast('Logged out successfully', 'in');
     } catch (err) {
       addToast('Logout failed', 'er');
@@ -607,282 +689,305 @@ export default function App() {
     return userProfile.permissions?.includes(p) || false;
   };
 
+  const navPosition = appSettings.navPosition || 'top';
+
+  const navTabs = [
+    { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data' },
+    { id: 'master', label: 'Order Master', icon: Database, perm: 'view-data' },
+    { id: 'entry', label: 'Data Entry', icon: Keyboard, perm: 'view-data' },
+    { id: 'fin-track', label: 'Finishing', icon: ArrowRightLeft, perm: 'view-data' },
+    { id: 'custom-report', label: 'Analytics', icon: FileSpreadsheet, perm: 'view-data' },
+    { id: 'status', label: 'Tracking', icon: Target, perm: 'view-data' },
+    { id: 'dpr', label: 'DPR', icon: FileText, perm: 'view-data' },
+    { id: 'wip', label: 'WIP Audit', icon: BarChart3, perm: 'view-data' },
+    { id: 'settings', label: 'Settings', icon: Settings2 },
+  ];
+
   return (
-    <div className="relative z-10 min-h-screen flex flex-col bg-bg text-fg">
-      {/* Toast Container */}
-      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2">
-        <AnimatePresence>
-          {toasts.map(t => (
-            <motion.div
-              key={t.id}
-              initial={{ opacity: 0, x: 30 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className={cn(
-                "px-4 py-2.5 rounded-md text-[12px] font-semibold flex items-center gap-2 shadow-xl border",
-                t.type === 'ok' && "bg-[#065f46] text-[#6ee7b7] border-success",
-                t.type === 'er' && "bg-[#7f1d1d] text-[#fca5a5] border-danger",
-                t.type === 'in' && "bg-[#164e63] text-[#67e8f9] border-info"
-              )}
-            >
-              {t.type === 'ok' && <CheckCircle2 size={14} />}
-              {t.type === 'er' && <AlertCircle size={14} />}
-              {t.type === 'in' && <InfoIcon size={14} />}
-              {t.msg}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-
-      {/* Sticky Header Wrapper */}
-      <div className="sticky top-0 z-50 no-print shadow-2xl shadow-slate-950/20">
-        {/* Header */}
-        <header className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 py-3 relative z-20">
-          <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 shrink-0">
-              <div className="bg-gradient-to-br from-accent to-accent2 w-11 h-11 rounded-xl flex items-center justify-center shadow-xl shadow-accent/20 transform hover:rotate-12 transition-transform duration-300">
-                <Scissors className="text-slate-950" size={24} />
-              </div>
-              <div className="hidden sm:block">
-                <h1 className="text-lg font-black tracking-tight text-fg leading-none">ALPHA CLOTHING LTD</h1>
-                <p className="text-[10px] text-accent font-bold uppercase tracking-[0.2em] mt-1 opacity-80">Daily Production Report (DPR) System</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="hidden lg:flex flex-col items-end border-r border-border pr-4">
-                <span className="text-[9px] font-black text-muted uppercase tracking-widest opacity-60">Logged in as</span>
-                <span className="text-xs font-extrabold text-fg">{user.email}</span>
-              </div>
-              
-              <div className="hidden md:flex items-center gap-2 text-[11px] font-bold text-fg bg-bg/50 px-4 py-2 rounded-xl border border-border">
-                <Clock size={14} className="text-accent" />
-                <span className="num tracking-tighter">{format(new Date(), 'dd-MMM-yy HH:mm:ss')}</span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button className="btn btn-o btn-s rounded-xl border-border hover:bg-accent/10 p-2.5" onClick={toggleTheme} title="Toggle Theme">
-                  {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                </button>
-                <button className="btn btn-o btn-s text-danger border-danger/20 hover:bg-danger/10 rounded-xl px-4" onClick={handleLogout}>
-                  Logout
-                </button>
-                
-                {/* Download Report Button - Back to Right */}
-                <div className="relative">
-                  <button 
-                    className="btn btn-a btn-s gap-2 rounded-xl shadow-lg shadow-info/20 px-5 h-10" 
-                    onClick={() => setIsDownloadOpen(!isDownloadOpen)}
-                  >
-                    <FileDown size={18} /> <span className="hidden md:inline">Download Report</span>
-                  </button>
-                  <AnimatePresence>
-                    {isDownloadOpen && (
-                      <>
-                        <div 
-                          className="fixed inset-0 z-[100]" 
-                          onClick={() => setIsDownloadOpen(false)} 
-                        />
-                        <motion.div 
-                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                          className="absolute right-0 mt-4 w-60 bg-bg2/98 backdrop-blur-2xl border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[110] overflow-hidden ring-1 ring-white/10"
-                        >
-                          <button 
-                            className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-accent/10 flex items-center gap-4 border-b border-border transition-colors"
-                            onClick={() => {
-                              downloadPDF();
-                              setIsDownloadOpen(false);
-                            }}
-                          >
-                            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
-                              <FileText size={16} className="text-accent" />
-                            </div>
-                            Download as PDF
-                          </button>
-                          <button 
-                            className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-success/10 flex items-center gap-4 transition-colors"
-                            onClick={() => {
-                              exportExcel();
-                              setIsDownloadOpen(false);
-                            }}
-                          >
-                            <div className="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center">
-                              <Download size={16} className="text-success" />
-                            </div>
-                            Download as Excel
-                          </button>
-                        </motion.div>
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-            </div>
+    <div className={cn(
+      "min-h-screen bg-bg text-fg font-sans selection:bg-accent selection:text-slate-950 flex",
+      navPosition === 'side' ? "flex-row" : "flex-col"
+    )}>
+      <AnimatePresence>
+        {toasts.length > 0 && (
+          <div className="fixed top-24 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
+            {toasts.map(t => (
+              <motion.div
+                key={t.id}
+                initial={{ opacity: 0, x: 50, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 20, scale: 0.95 }}
+                className={cn(
+                  "p-4 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-xl border border-white/10 text-xs font-black uppercase tracking-widest pointer-events-auto min-w-[300px]",
+                  t.type === 'ok' ? "bg-success/20 text-success border-success/30" : 
+                  t.type === 'er' ? "bg-danger/20 text-danger border-danger/30" : 
+                  "bg-info/20 text-info border-info/30"
+                )}
+              >
+                {t.type === 'ok' && <CheckCircle2 size={14} />}
+                {t.type === 'er' && <AlertCircle size={14} />}
+                {t.type === 'in' && <InfoIcon size={14} />}
+                {t.msg}
+              </motion.div>
+            ))}
           </div>
-        </header>
+        )}
+      </AnimatePresence>
 
-        {/* Tabs */}
-        <div className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 relative z-10">
-          <div className="max-w-[1700px] mx-auto flex gap-2 overflow-x-auto no-scrollbar py-1">
-            {[
-              { id: 'master', label: 'Order Master', icon: Database, perm: 'view-data' },
-              { id: 'entry', label: 'Data Entry', icon: Keyboard, perm: 'view-data' },
-              { id: 'status', label: 'Order Status', icon: Target, perm: 'view-data' },
-              { id: 'dpr', label: 'DPR Report', icon: FileText, perm: 'view-data' },
-              { id: 'wip', label: 'WIP Report', icon: BarChart3, perm: 'view-data' },
-              { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data' },
-              userProfile?.role === 'admin' && { id: 'admin', label: 'Admin Panel', icon: Shield },
-            ].filter(Boolean).map((tab: any) => {
-              if (tab.perm && !hasPermission(tab.perm)) return null;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "relative px-6 py-3.5 text-[13px] font-bold transition-all whitespace-nowrap flex items-center gap-2.5 rounded-xl my-1",
-                    isActive 
-                      ? "text-accent bg-accent/10 shadow-inner" 
-                      : "text-muted hover:text-fg hover:bg-white/5"
-                  )}
-                >
-                  <tab.icon size={16} className={cn(isActive ? "text-accent" : "text-muted")} />
-                  {tab.label}
-                  {isActive && (
-                    <motion.div 
-                      layoutId="activeTab"
-                      className="absolute bottom-0 left-2 right-2 h-0.5 bg-accent rounded-full"
-                    />
-                  )}
-                </button>
-              );
+      {/* Side Navigation Layout */}
+      {navPosition === 'side' && (
+        <aside className={cn(
+          "w-72 bg-bg2/95 backdrop-blur-3xl border-r border-border h-screen sticky top-0 flex flex-col no-print z-50 overflow-y-auto no-scrollbar shadow-2xl transition-all duration-500 shrink-0",
+          appSettings.compactMode ? "w-20" : "w-72"
+        )}>
+          {/* Side Logo */}
+          <div className="p-6 flex items-center gap-4 border-b border-border/50">
+             <div className="w-12 h-12 rounded-xl bg-slate-900 border border-accent/20 flex items-center justify-center shrink-0 shadow-lg">
+                <img src="/logo-2.png" alt="logo" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
+             </div>
+             {!appSettings.compactMode && (
+               <div>
+                  <h1 className="text-lg font-black tracking-tighter leading-none">ALPHA ERP</h1>
+                  <span className="text-[8px] font-black text-accent uppercase tracking-widest mt-1 block">Production Control</span>
+               </div>
+             )}
+          </div>
+
+          <div className="flex-1 px-3 space-y-1 mt-6">
+            {navTabs.map(tab => {
+               if (tab.perm && !hasPermission(tab.perm)) return null;
+               const isActive = activeTab === tab.id;
+               return (
+                 <button
+                   key={tab.id}
+                   onClick={() => setActiveTab(tab.id)}
+                   className={cn(
+                     "w-full flex items-center gap-4 p-3.5 rounded-2xl transition-all group relative",
+                     isActive 
+                       ? "bg-accent text-slate-950 shadow-xl shadow-accent/20 font-black" 
+                       : "text-muted hover:bg-white/5 hover:text-fg font-bold"
+                   )}
+                 >
+                    <tab.icon size={20} className={cn(isActive ? "text-slate-950" : "text-muted group-hover:text-fg")} />
+                    {!appSettings.compactMode && (
+                      <span className="text-[11px] uppercase tracking-widest">{tab.label}</span>
+                    )}
+                    {isActive && (
+                      <motion.div layoutId="activeNavSide" className="absolute left-0 w-1 h-6 bg-slate-950 rounded-full" />
+                    )}
+                 </button>
+               );
             })}
           </div>
-        </div>
-      </div>
 
-      {/* Main Content */}
-      <main id="report-content" className="max-w-[1700px] mx-auto p-6 flex-1 w-full" ref={contentRef}>
-        <React.Suspense fallback={
-          <div className="flex flex-col items-center justify-center p-32 gap-6">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-accent/10 rounded-full" />
-              <div className="absolute top-0 left-0 w-16 h-16 border-4 border-t-accent rounded-full animate-spin" />
+          {/* User Profile Summary Side */}
+          {!appSettings.compactMode && user && (
+            <div className="p-4 m-3 rounded-2xl bg-white/5 border border-border mt-auto">
+               <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-slate-950 font-black">
+                     {user.email?.[0].toUpperCase()}
+                  </div>
+                  <div className="overflow-hidden">
+                     <div className="text-[10px] font-black uppercase truncate">{user.email}</div>
+                     <div className="text-[9px] text-accent font-bold uppercase tracking-widest">{userProfile?.role}</div>
+                  </div>
+               </div>
             </div>
-            <p className="text-xs font-black text-muted uppercase tracking-[0.3em] animate-pulse">Initializing {activeTab.toUpperCase()} Module</p>
-          </div>
-        }>
-          <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 20, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.99 }}
-            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="w-full"
-          >
-            {activeTab === 'master' && (
-              <OrderMaster 
-                orders={orders} 
-                addToast={addToast} 
-                userProfile={userProfile}
-              />
-            )}
-            {activeTab === 'entry' && (
-              <DataEntry 
-                orders={orders} 
-                entries={entries} 
-                getPOInfo={getPOInfo}
-                addToast={addToast} 
-                userProfile={userProfile}
-              />
-            )}
-            {activeTab === 'status' && (
-              <OrderStatus 
-                orders={orders} 
-                entries={entries}
-                getPOInfo={getPOInfo}
-              />
-            )}
-            {activeTab === 'dpr' && (
-              <DPRReport 
-                orders={orders} 
-                entries={entries} 
-                getPOInfo={getPOInfo}
-              />
-            )}
-            {activeTab === 'wip' && (
-              <WIPReport 
-                orders={orders} 
-                entries={entries} 
-                getPOInfo={getPOInfo}
-              />
-            )}
-            {activeTab === 'dash' && (
-              <Dashboard 
-                orders={orders} 
-                entries={entries} 
-                getPOInfo={getPOInfo}
-              />
-            )}
-            {activeTab === 'admin' && userProfile?.role === 'admin' && (
-              isAdminUnlocked ? (
-                <AdminPanel orders={orders} entries={entries} />
-              ) : (
-                <div className="flex items-center justify-center min-h-[60vh]">
-                  <div className="bg-bg2 border border-border p-8 rounded-2xl shadow-2xl max-w-md w-full text-center space-y-6">
-                    <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center mx-auto text-accent">
-                      <Shield size={32} />
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold">Admin Verification</h3>
-                      <p className="text-sm text-muted mt-1">Please enter the administrative password to continue</p>
-                    </div>
-                    <form 
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const pwd = (e.currentTarget.elements.namedItem('adminPwd') as HTMLInputElement).value;
-                        if (pwd === 'admin123') { // Default password
-                          setIsAdminUnlocked(true);
-                          addToast('Admin access granted', 'ok');
-                        } else {
-                          addToast('Invalid admin password', 'er');
-                        }
+          )}
+        </aside>
+      )}
+
+      {/* Main Content Wrapper */}
+      <div className={cn("flex-1 flex flex-col min-w-0 overflow-hidden", navPosition === 'side' ? "min-h-screen" : "")}>
+        {/* Sticky Header Wrapper (Top/Horizontal Only) */}
+        {navPosition === 'top' && (
+          <div className="sticky top-0 z-50 no-print shadow-2xl shadow-slate-950/20">
+            {/* Header */}
+            <header className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 py-2.5 relative z-20">
+              <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3 shrink-0">
+                  <div className="relative w-12 h-12 rounded-xl overflow-hidden shadow-lg group cursor-pointer border border-accent/20 bg-slate-900/80 backdrop-blur-xl">
+                    <img 
+                      src="/logo-2.png" 
+                      alt="Alpha Clothing Logo" 
+                      className="w-full h-full object-contain p-1"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = "/logo.png";
                       }}
-                      className="space-y-4"
-                    >
-                      <input 
-                        type="password" 
-                        name="adminPwd"
-                        placeholder="Enter Admin Password"
-                        className="fi text-center py-3"
-                        autoFocus
-                      />
-                      <button type="submit" className="btn btn-a w-full py-3">
-                        Unlock Admin Panel
-                      </button>
-                    </form>
+                    />
+                  </div>
+                  <div className="hidden lg:block">
+                    <h1 className="text-xl font-black tracking-tighter leading-none text-fg font-display">
+                      ALPHA CLOTHING LTD
+                    </h1>
+                    <p className="text-[9px] text-accent font-black uppercase tracking-[0.2em] mt-1">
+                      The Best Look Anytime Anywhere
+                    </p>
                   </div>
                 </div>
-              )
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </React.Suspense>
-    </main>
 
-      {/* Footer */}
-      <footer className="bg-bg2 border-t border-border px-5 py-2.5 no-print">
-        <div className="max-w-[1700px] mx-auto flex items-center justify-between">
-          <span className="text-[10px] text-muted flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-            Synced with Firebase
-          </span>
-          <span className="text-[10px] text-muted font-mono">ALPHA CLOTHING LTD v5.0</span>
-        </div>
-      </footer>
+                <div className="flex items-center gap-4">
+                  <div className="hidden md:flex flex-col items-end border-r border-border pr-4 h-8 justify-center">
+                    <div className="flex items-center gap-2 text-[10px] font-black text-fg">
+                        <Clock size={12} className="text-accent animate-pulse" />
+                        <span className="font-mono">{format(time, 'HH:mm:ss')}</span>
+                        <span className="opacity-40">|</span>
+                        <span>{format(time, 'dd MMM yy')}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <button 
+                        className="btn btn-p btn-s gap-2 rounded-xl h-9 px-4 shadow-lg shadow-accent/10" 
+                        onClick={() => setIsDownloadOpen(!isDownloadOpen)}
+                      >
+                        <Download size={14} /> <span className="hidden sm:inline text-[10px] font-black tracking-widest uppercase">Export HUB</span>
+                      </button>
+                      <AnimatePresence>
+                        {isDownloadOpen && (
+                          <>
+                            <div className="fixed inset-0 z-[100]" onClick={() => setIsDownloadOpen(false)} />
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              className="absolute right-0 mt-4 w-60 bg-bg2/98 backdrop-blur-2xl border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[110] overflow-hidden"
+                            >
+                              <button onClick={() => { downloadPDF(); setIsDownloadOpen(false); }} className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-accent/10 flex items-center gap-4 border-b border-border transition-colors">
+                                <FileText size={16} className="text-accent" /> Download as PDF
+                              </button>
+                              <button onClick={() => { exportExcel(); setIsDownloadOpen(false); }} className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-success/10 flex items-center gap-4 transition-colors">
+                                <Download size={16} className="text-success" /> Download as Excel
+                              </button>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    
+                    <button className="btn btn-o btn-s rounded-xl border-border hover:bg-accent/10 p-2 h-9 w-9" onClick={toggleTheme}>
+                      {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </header>
+
+            {/* Top Tabs */}
+            <div className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 relative z-10">
+              <div className="max-w-[1700px] mx-auto flex gap-2 overflow-x-auto no-scrollbar py-1">
+                {navTabs.map((tab: any) => {
+                  if (tab.perm && !hasPermission(tab.perm)) return null;
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={cn(
+                        "relative px-3.5 py-2 text-[11px] font-bold transition-all whitespace-nowrap flex items-center gap-2 rounded-lg my-0.5",
+                        isActive 
+                          ? "text-accent bg-accent/10 shadow-inner" 
+                          : "text-muted hover:text-fg hover:bg-white/5"
+                      )}
+                    >
+                      <tab.icon size={16} className={cn(isActive ? "text-accent" : "text-muted")} />
+                      {tab.label}
+                      {isActive && (
+                        <motion.div 
+                          layoutId="activeTab"
+                          className="absolute bottom-0 left-2 right-2 h-0.5 bg-accent rounded-full"
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Minimal Header for Side Navigation (Mobile/Tablet) */}
+        {navPosition === 'side' && (
+           <header className={cn("sticky top-0 z-[60] bg-bg2/90 backdrop-blur-xl border-b border-border p-3 flex items-center justify-between no-print", appSettings.compactMode ? "" : "lg:hidden")}>
+              <div className="flex items-center gap-3">
+                 <img src="/logo-2.png" alt="logo" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
+                 <h1 className="text-sm font-black tracking-tight">ALPHA CLOTHING</h1>
+              </div>
+              <div className="flex items-center gap-2">
+                 <div className="flex gap-1 overflow-x-auto no-scrollbar max-w-[160px]">
+                    {navTabs.slice(0, 4).map(t => (
+                        <button key={t.id} onClick={() => setActiveTab(t.id)} className={cn("p-2 rounded-lg", activeTab === t.id ? "bg-accent text-slate-950" : "text-muted")}>
+                           <t.icon size={14} />
+                        </button>
+                    ))}
+                 </div>
+                 <button className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-slate-950 font-black text-[10px]">
+                   {user.email?.[0].toUpperCase()}
+                 </button>
+              </div>
+           </header>
+        )}
+
+        {/* Main Content Area */}
+        <main id="report-content" className={cn("mx-auto p-4 lg:p-6 flex-1 w-full", navPosition === 'top' ? "max-w-[1700px]" : "max-w-[1900px]")} ref={contentRef}>
+          <React.Suspense fallback={
+            <div className="flex flex-col items-center justify-center p-32 gap-6">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-accent/10 rounded-full" />
+                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-t-accent rounded-full animate-spin" />
+              </div>
+              <p className="text-[10px] font-black text-fg/60 dark:text-muted uppercase tracking-[0.5em] animate-pulse">Initializing Component...</p>
+            </div>
+          }>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 15, scale: 0.995 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -15, scale: 0.995 }}
+                transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+                className="w-full h-full"
+              >
+                {activeTab === 'dash' && <Dashboard orders={orders} entries={entries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
+                {activeTab === 'master' && <OrderMaster orders={orders} addToast={addToast} userProfile={userProfile} />}
+                {activeTab === 'entry' && <DataEntry orders={orders} entries={entries} getPOInfo={getPOInfo} addToast={addToast} userProfile={userProfile} />}
+                {activeTab === 'fin-track' && <FinishingTracker orders={orders} />}
+                {activeTab === 'status' && <StatusReport orders={orders} entries={entries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
+                {activeTab === 'dpr' && <DPRReport orders={orders} entries={entries} getPOInfo={getPOInfo} />}
+                {activeTab === 'wip' && <WIPReport orders={orders} entries={entries} getPOInfo={getPOInfo} poAggregates={aggregates.poMap} />}
+                {activeTab === 'custom-report' && <ReportBuilder orders={orders} entries={entries} />}
+                {activeTab === 'health' && <SystemHealth orders={orders} entries={entries} />}
+                {activeTab === 'about' && <AboutSection />}
+                {activeTab === 'settings' && (
+                  <SettingsModule 
+                    orders={orders} 
+                    entries={entries} 
+                    userProfile={userProfile}
+                    currentTheme={theme}
+                    setTheme={setTheme}
+                    appSettings={appSettings}
+                    updateAppSettings={updateAppSettings}
+                  />
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </React.Suspense>
+        </main>
+
+        {/* Footer */}
+        <footer className="bg-bg2 border-t border-border px-5 py-2.5 no-print">
+          <div className="max-w-[1700px] mx-auto flex items-center justify-between">
+            <span className="text-[10px] text-muted flex items-center gap-1.5 uppercase tracking-widest font-black">
+              <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+              Real-time Syc Active
+            </span>
+            <span className="text-[10px] text-muted font-mono uppercase tracking-widest">ALPHA PRO-TECH SERIES v5.1</span>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

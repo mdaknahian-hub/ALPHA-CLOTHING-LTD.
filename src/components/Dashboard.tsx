@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -20,12 +20,14 @@ import {
   LayoutDashboard, 
   Scissors, 
   Shirt, 
-  Box, 
+  Box as BoxIcon, 
   Target, 
   ClipboardList,
   TrendingUp,
   Activity,
-  Users
+  Users,
+  Calendar,
+  ChevronRight
 } from 'lucide-react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry, POInfo } from '../types';
@@ -35,11 +37,14 @@ interface DashboardProps {
   orders: Order[];
   entries: ProductionEntry[];
   getPOInfo: (poNo: string) => POInfo | null;
+  poColorAggregates?: Record<string, any>;
 }
 
 const COLORS = ['#f59e0b', '#14b8a6', '#06b6d4', '#ef4444', '#8b5cf6', '#ec4899', '#84cc16', '#f97316'];
 
-export default function Dashboard({ orders, entries, getPOInfo }: DashboardProps) {
+export default function Dashboard({ orders, entries, getPOInfo, poColorAggregates = {} }: DashboardProps) {
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+
   const stats = useMemo(() => {
     let totalCut = 0, totalSewOut = 0, totalWashR = 0, totalFinOut = 0, totalPoly = 0, totalShipment = 0, totalOrderQty = 0;
     const buyerPoly: { [key: string]: number } = {};
@@ -87,9 +92,10 @@ export default function Dashboard({ orders, entries, getPOInfo }: DashboardProps
 
     // Order Status Visuals Data
     const orderStatusData = orders.map(o => {
-      const poEntries = entries.filter(e => e.poNo === o.poNo && e.color === o.color);
-      const poly = poEntries.reduce((s, e) => s + (e.poly || 0), 0);
-      const shipment = poEntries.reduce((s, e) => s + (e.shipment || 0), 0);
+      const pcKey = `${o.poNo}-${o.color}`;
+      const agg = poColorAggregates[pcKey] || { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0, shipment: 0 };
+      const poly = agg.poly;
+      const shipment = agg.shipment;
       const ach = o.orderQty ? Math.round((poly / o.orderQty) * 100) : 0;
       const shipAch = poly ? Math.round((shipment / poly) * 100) : 0;
       
@@ -120,7 +126,25 @@ export default function Dashboard({ orders, entries, getPOInfo }: DashboardProps
       totalCut, totalSewOut, totalPoly, totalShipment, overallAch, overallShipAch, activePOs: uniquePOs.length,
       buyerChartData, trendChartData, opChartData, orderStatusData
     };
-  }, [entries, getPOInfo]);
+  }, [entries, getPOInfo, orders]);
+
+  const dailySummary = useMemo(() => {
+    const summary = {
+      cut: 0,
+      sewOut: 0,
+      poly: 0,
+      shipment: 0
+    };
+
+    entries.filter(e => e.date === selectedDate).forEach(e => {
+      summary.cut += (e.cut || 0);
+      summary.sewOut += (e.sewOut || 0);
+      summary.poly += (e.poly || 0);
+      summary.shipment += (e.shipment || 0);
+    });
+
+    return summary;
+  }, [entries, selectedDate]);
 
   return (
     <div className="space-y-6">
@@ -139,7 +163,7 @@ export default function Dashboard({ orders, entries, getPOInfo }: DashboardProps
         {[
           { label: 'Total Cutting', value: stats.totalCut, icon: Scissors, color: 'accent', formula: '=SUM(Cut)' },
           { label: 'Total Sewing Out', value: stats.totalSewOut, icon: Shirt, color: 'teal', formula: '=SUM(SewOut)' },
-          { label: 'Total Poly Entry', value: stats.totalPoly, icon: Box, color: 'info', formula: '=SUM(Poly)', highlight: true },
+          { label: 'Total Poly Entry', value: stats.totalPoly, icon: BoxIcon, color: 'info', formula: '=SUM(Poly)', highlight: true },
           { label: 'Total Shipment', value: stats.totalShipment, icon: Activity, color: 'teal', formula: '=SUM(Shipment)' },
           { label: 'Overall Achievement', value: `${stats.overallAch}%`, icon: Target, color: 'danger', formula: '=Poly/OrderQty', ach: stats.overallAch },
           { label: 'Active Orders', value: stats.activePOs, icon: ClipboardList, color: 'purple', formula: '=UNIQUE(PO)' },
@@ -348,6 +372,61 @@ export default function Dashboard({ orders, entries, getPOInfo }: DashboardProps
               </BarChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      </div>
+
+      {/* Daily Production Summary */}
+      <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <Calendar size={18} className="text-accent" />
+              Daily Production Summary
+            </h3>
+            <p className="text-[10px] text-muted">Total output overview for a specific day</p>
+          </div>
+          <div className="flex items-center gap-2 bg-bg2/50 p-1 rounded-lg border border-border">
+            <span className="text-[10px] font-bold text-muted uppercase px-2">Select Date:</span>
+            <input 
+              type="date" 
+              value={selectedDate} 
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="fi h-8 text-[11px] w-[140px] bg-card border-none"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[
+            { label: 'Today Cut', value: dailySummary.cut, icon: Scissors, color: 'accent' },
+            { label: 'Today Sew Out', value: dailySummary.sewOut, icon: Shirt, color: 'teal' },
+            { label: 'Today Poly', value: dailySummary.poly, icon: BoxIcon, color: 'info' },
+            { label: 'Today Shipment', value: dailySummary.shipment, icon: Activity, color: 'success' },
+          ].map((item, i) => (
+            <div key={i} className="bg-bg2/30 border border-border rounded-lg p-4 flex flex-col justify-between group hover:bg-bg2/50 transition-colors">
+              <div className="flex items-center justify-between mb-3">
+                <div className={cn(
+                  "p-1.5 rounded-md",
+                  item.color === 'accent' && "bg-accent/10 text-accent",
+                  item.color === 'teal' && "bg-teal/10 text-teal",
+                  item.color === 'info' && "bg-info/10 text-info",
+                  item.color === 'success' && "bg-success/10 text-success"
+                )}>
+                  <item.icon size={14} />
+                </div>
+                <ChevronRight size={12} className="text-muted/30 group-hover:translate-x-0.5 transition-transform" />
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-muted uppercase tracking-tight block mb-1">{item.label}</span>
+                <span className={cn(
+                  "text-xl font-black num",
+                  item.value > 0 ? "text-fg" : "text-muted/30"
+                )}>
+                  {item.value.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

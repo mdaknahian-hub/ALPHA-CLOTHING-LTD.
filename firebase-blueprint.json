@@ -64,6 +64,24 @@
         "path": { "type": "string" }
       },
       "required": ["timestamp", "userId", "action"]
+    },
+    "FinishingTrackingEntry": {
+      "title": "Finishing Tracking Entry",
+      "description": "Specific independent tracking for finishing input and output",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "style": { "type": "string" },
+        "poNo": { "type": "string" },
+        "color": { "type": "string" },
+        "lineNo": { "type": "string" },
+        "input": { "type": "number" },
+        "output": { "type": "number" },
+        "orderQty": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["date", "style", "poNo", "color", "lineNo", "input", "output", "userId"]
     }
   },
   "firestore": {
@@ -82,6 +100,10 @@
     "/auditLogs/{logId}": {
       "schema": "AuditLog",
       "description": "System activity logs"
+    },
+    "/finishing_tracking/{entryId}": {
+      "schema": "FinishingTrackingEntry",
+      "description": "Independent finishing line-wise tracking entries"
     }
   }
 }

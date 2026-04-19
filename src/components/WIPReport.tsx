@@ -1,17 +1,19 @@
 import React, { useMemo, useState } from 'react';
-import { BarChart3, Info, AlertTriangle, CheckCircle2, AlertCircle, Search, Clock, X, ArrowRight, Database } from 'lucide-react';
+import { BarChart3, Info, AlertTriangle, CheckCircle2, AlertCircle, Search, Clock, X, ArrowRight, Database, Download } from 'lucide-react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry, POInfo } from '../types';
 import { format, parseISO, differenceInCalendarDays } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
+import * as XLSX from 'xlsx';
 
 interface WIPReportProps {
   orders: Order[];
   entries: ProductionEntry[];
   getPOInfo: (poNo: string) => POInfo | null;
+  poAggregates?: Record<string, any>;
 }
 
-export default function WIPReport({ orders, entries, getPOInfo }: WIPReportProps) {
+export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {} }: WIPReportProps) {
   const [search, setSearch] = useState('');
   const [historyPO, setHistoryPO] = useState<string | null>(null);
   const [selectedError, setSelectedError] = useState<string[] | null>(null);
@@ -51,8 +53,8 @@ export default function WIPReport({ orders, entries, getPOInfo }: WIPReportProps
   }, [entries, historyPO]);
 
   const wipData = useMemo(() => {
-    // Get unique POs from entries
-    const uniquePOs = Array.from(new Set(entries.map(e => e.poNo)));
+    // Get unique POs from entries OR orders
+    const uniquePOs = Array.from(new Set([...entries.map(e => e.poNo), ...orders.map(o => o.poNo)]));
     const today = new Date();
     const s = search.toLowerCase();
     
@@ -60,6 +62,10 @@ export default function WIPReport({ orders, entries, getPOInfo }: WIPReportProps
       const info = getPOInfo(po);
       if (!info) return null;
 
+      // Use pre-calculated aggregates instead of filtering entries array
+      const agg = poAggregates[po] || { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0, shipment: 0 };
+      
+      // Need poEntries only for Line/Floor summary strings (this can be optimized but is less heavy than full aggregation)
       const poEntries = entries.filter(e => e.poNo === po);
       const activeLines = Array.from(new Set(poEntries.filter(e => e.lineNo).map(e => e.lineNo))).join(', ');
       const activeFloors = Array.from(new Set(poEntries.filter(e => e.floor).map(e => e.floor))).join(', ');
@@ -76,13 +82,13 @@ export default function WIPReport({ orders, entries, getPOInfo }: WIPReportProps
       }
       
       const totalOrderQty = info.totalQty;
-      const cumCut = poEntries.reduce((s, e) => s + (e.cut || 0), 0);
-      const cumSewOut = poEntries.reduce((s, e) => s + (e.sewOut || 0), 0);
-      const cumWashR = poEntries.reduce((s, e) => s + (e.washR || 0), 0);
-      const cumFinIn = poEntries.reduce((s, e) => s + (e.finIn || 0), 0);
-      const cumFinOut = poEntries.reduce((s, e) => s + (e.finOut || 0), 0);
-      const cumPoly = poEntries.reduce((s, e) => s + (e.poly || 0), 0);
-      const cumShipment = poEntries.reduce((s, e) => s + (e.shipment || 0), 0);
+      const cumCut = agg.cut;
+      const cumSewOut = agg.sewOut;
+      const cumWashR = agg.washR;
+      const cumFinIn = agg.finIn;
+      const cumFinOut = agg.finOut;
+      const cumPoly = agg.poly;
+      const cumShipment = agg.shipment;
       const stock = cumPoly - cumShipment;
 
       const cuttingAch = totalOrderQty ? Math.round((cumCut / totalOrderQty) * 100 * 10) / 10 : 0;
@@ -130,6 +136,34 @@ export default function WIPReport({ orders, entries, getPOInfo }: WIPReportProps
 
     return rows.sort((a, b) => a.buyer.localeCompare(b.buyer) || a.poNo.localeCompare(b.poNo));
   }, [entries, getPOInfo]);
+
+  const handleDownload = () => {
+    const header = [
+      ["ALPHA CLOTHING LTD."],
+      ["TENGURI, BKSP, ASHULIA, SAVAR, DHAKA"],
+      ["Production WIP & Risk Analysis Report"],
+      [`Generated At: ${format(new Date(), 'dd MMM yyyy HH:mm:ss')}`],
+      []
+    ];
+
+    const colHeaders = [
+      "Buyer", "Style", "PO No", "Ship Date", "Lines", "Floors", 
+      "Order Qty", "Cut Qty", "Cut %", "Sewing", "Sew WIP", "Wash Recv", "Wash WIP", 
+      "Input Qty", "Input WIP", "Output Qty", "Output WIP", "Poly Qty", "Poly WIP", "Shipment", "Stock", "Risk"
+    ];
+
+    const rows = wipData.map(r => [
+      r.buyer, r.style, r.poNo, r.shipDate, r.activeLines, r.activeFloors,
+      r.orderQty, r.cumCut, r.cuttingAch + '%', r.cumSewOut, r.sewWip, r.cumWashR, r.washWip,
+      r.cumFinIn, r.inputWip, r.cumFinOut, r.outputWip, r.cumPoly, r.polyWip, r.cumShipment, r.stock, r.riskLevel
+    ]);
+
+    const finalData = [...header, colHeaders, ...rows];
+    const worksheet = XLSX.utils.aoa_to_sheet(finalData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "WIP Report");
+    XLSX.writeFile(workbook, `WIP_Report_${format(new Date(), 'ddMMMyy')}.xlsx`);
+  };
 
   const getRiskBadge = (level: string) => {
     switch (level) {

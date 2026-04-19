@@ -66,3 +66,17 @@ export interface SystemSettings {
   maintenanceMode: boolean;
   dataRetentionDays: number;
 }
+
+export interface FinishingTrackingEntry {
+  id: string;
+  date: string;
+  style: string;
+  poNo: string;
+  color: string;
+  lineNo: string;
+  input: number;
+  output: number;
+  orderQty: number;
+  createdAt: string;
+  userId: string;
+}

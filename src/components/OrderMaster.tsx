@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Pencil, Trash2, Database, X, Save, Search, FileUp, AlertCircle, CheckCircle2, History } from 'lucide-react';
+import { Plus, Pencil, Trash2, Database, X, Save, Search, FileUp, AlertCircle, CheckCircle2, History as HistoryIcon, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry } from '../types';
 import { BUYERS } from '../constants';
@@ -18,6 +18,7 @@ interface OrderMasterProps {
 export default function OrderMaster({ orders, addToast, userProfile }: OrderMasterProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isBulkUpdateModalOpen, setIsBulkUpdateModalOpen] = useState(false);
   const [isHistoricalModalOpen, setIsHistoricalModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
@@ -25,6 +26,12 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
   const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Order; direction: 'asc' | 'desc' } | null>({ key: 'poNo', direction: 'desc' });
+
+  const [bulkUpdateData, setBulkUpdateData] = useState({
+    buyer: '',
+    style: ''
+  });
 
   const hasPermission = (p: string) => {
     if (!userProfile) return false;
@@ -34,29 +41,52 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
 
   const filteredOrders = useMemo(() => {
     const s = search.toLowerCase();
-    return orders
+    let result = orders
       .filter(o => 
         o.poNo.toLowerCase().includes(s) || 
         o.buyer.toLowerCase().includes(s) || 
         o.style.toLowerCase().includes(s)
-      )
-      .sort((a, b) => {
-        // Sort by Buyer first
+      );
+
+    if (sortConfig) {
+      result = [...result].sort((a, b) => {
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+
+        if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    } else {
+      // Default fallback sort
+      result.sort((a, b) => {
         const buyerCmp = a.buyer.localeCompare(b.buyer);
         if (buyerCmp !== 0) return buyerCmp;
-        
-        // Then by Style
         const styleCmp = a.style.localeCompare(b.style);
         if (styleCmp !== 0) return styleCmp;
-        
-        // Then by PO No
-        const poCmp = a.poNo.localeCompare(b.poNo);
-        if (poCmp !== 0) return poCmp;
-        
-        // Finally by Color
-        return a.color.localeCompare(b.color);
+        return a.poNo.localeCompare(b.poNo);
       });
-  }, [orders, search]);
+    }
+
+    return result;
+  }, [orders, search, sortConfig]);
+
+  const handleSort = (key: keyof Order) => {
+    setSortConfig(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const getSortIcon = (key: keyof Order) => {
+    if (sortConfig?.key !== key) return <ChevronsUpDown size={12} className="opacity-30" />;
+    return sortConfig.direction === 'asc' ? 
+      <ChevronUp size={12} className="text-accent" /> : 
+      <ChevronDown size={12} className="text-accent" />;
+  };
 
   const [formData, setFormData] = useState({
     buyer: '',
@@ -178,6 +208,47 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
     }
   };
 
+  const handleBulkUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedIds.size === 0) return;
+    if (!bulkUpdateData.buyer && !bulkUpdateData.style) {
+      addToast('Please provide at least one field to update', 'er');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+      const idsArray = Array.from(selectedIds);
+      
+      const updateObj: any = {};
+      if (bulkUpdateData.buyer) updateObj.buyer = bulkUpdateData.buyer;
+      if (bulkUpdateData.style) updateObj.style = bulkUpdateData.style;
+
+      idsArray.forEach(id => {
+        batch.update(doc(db, 'orders', String(id)), updateObj);
+      });
+
+      await batch.commit();
+
+      await addAuditLog(
+        'EDIT',
+        'ORDER',
+        `Bulk Updated ${selectedIds.size} Orders (${Object.keys(updateObj).join(', ')})`,
+        '/orders'
+      );
+
+      addToast(`${selectedIds.size} orders updated successfully`, 'ok');
+      setSelectedIds(new Set());
+      setIsBulkUpdateModalOpen(false);
+      setBulkUpdateData({ buyer: '', style: '' });
+    } catch (err) {
+      addToast('Failed to update orders', 'er');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type } = e.target;
     setFormData(prev => ({
@@ -273,7 +344,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
                 onClick={() => setIsHistoricalModalOpen(true)}
                 title="Import previous production data"
               >
-                <History size={16} /> Historical Import
+                <HistoryIcon size={16} /> Historical Import
               </button>
               <button className="btn btn-o h-10 px-4 gap-2 rounded-xl" onClick={() => setIsBulkModalOpen(true)}>
                 <FileUp size={16} /> Bulk Import
@@ -309,12 +380,20 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
               <span className="text-[11px] text-accent font-black uppercase tracking-widest">
                 {selectedIds.size} Selected
               </span>
-              <button 
-                className="btn btn-d h-8 px-4 text-[10px] gap-2 rounded-lg shadow-lg shadow-danger/20"
-                onClick={() => setIsBulkDeleteConfirmOpen(true)}
-              >
-                <Trash2 size={14} /> Delete Selected
-              </button>
+              <div className="flex gap-2">
+                <button 
+                  className="btn btn-a h-8 px-4 text-[10px] gap-2 rounded-lg shadow-lg shadow-info/20"
+                  onClick={() => setIsBulkUpdateModalOpen(true)}
+                >
+                  <Pencil size={14} /> Bulk Edit
+                </button>
+                <button 
+                  className="btn btn-d h-8 px-4 text-[10px] gap-2 rounded-lg shadow-lg shadow-danger/20"
+                  onClick={() => setIsBulkDeleteConfirmOpen(true)}
+                >
+                  <Trash2 size={14} /> Delete Selected
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -336,12 +415,36 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
                   </div>
                 </th>
                 <th className="w-10">#</th>
-                <th className="text-left">Buyer</th>
-                <th className="text-left">Style</th>
-                <th>PO No</th>
-                <th>Ship Date</th>
-                <th>Color</th>
-                <th>Order Qty</th>
+                <th className="text-left cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('buyer')}>
+                  <div className="flex items-center gap-2">
+                    Buyer {getSortIcon('buyer')}
+                  </div>
+                </th>
+                <th className="text-left cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('style')}>
+                  <div className="flex items-center gap-2">
+                    Style {getSortIcon('style')}
+                  </div>
+                </th>
+                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('poNo')}>
+                  <div className="flex items-center justify-center gap-2">
+                    PO No {getSortIcon('poNo')}
+                  </div>
+                </th>
+                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('shipDate')}>
+                  <div className="flex items-center justify-center gap-2">
+                    Ship Date {getSortIcon('shipDate')}
+                  </div>
+                </th>
+                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('color')}>
+                  <div className="flex items-center justify-center gap-2">
+                    Color {getSortIcon('color')}
+                  </div>
+                </th>
+                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('orderQty')}>
+                  <div className="flex items-center justify-center gap-2">
+                    Order Qty {getSortIcon('orderQty')}
+                  </div>
+                </th>
                 <th className="no-print">Action</th>
               </tr>
             </thead>
@@ -469,6 +572,70 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
                   <button type="button" onClick={closeModal} className="btn btn-o">Cancel</button>
                   <button type="submit" className="btn btn-p">
                     <Save size={14} /> {editingOrder ? 'Update Order' : 'Save Order'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Bulk Update Modal */}
+      <AnimatePresence>
+        {isBulkUpdateModalOpen && (
+          <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsBulkUpdateModalOpen(false)}
+              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-card border border-border rounded-xl shadow-2xl p-6 max-w-sm w-full"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 bg-accent/10 rounded-full flex items-center justify-center">
+                  <Pencil size={20} className="text-accent" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold">Bulk Update</h3>
+                  <p className="text-[10px] text-muted uppercase">Updating {selectedIds.size} selected orders</p>
+                </div>
+              </div>
+
+              <form onSubmit={handleBulkUpdate} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-muted uppercase tracking-wider">New Buyer</label>
+                  <input 
+                    className="fi"
+                    placeholder="Leave empty to keep current"
+                    value={bulkUpdateData.buyer}
+                    onChange={(e) => setBulkUpdateData(prev => ({ ...prev, buyer: e.target.value }))}
+                    list="bulk-buyer-list-update"
+                  />
+                  <datalist id="bulk-buyer-list-update">
+                    {allBuyers.map(b => <option key={b} value={b} />)}
+                  </datalist>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-muted uppercase tracking-wider">New Style</label>
+                  <input 
+                    className="fi"
+                    placeholder="Leave empty to keep current"
+                    value={bulkUpdateData.style}
+                    onChange={(e) => setBulkUpdateData(prev => ({ ...prev, style: e.target.value }))}
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-3">
+                  <button type="button" onClick={() => setIsBulkUpdateModalOpen(false)} className="btn btn-o flex-1">Cancel</button>
+                  <button type="submit" className="btn btn-p flex-1" disabled={loading}>
+                    {loading ? 'Updating...' : 'Update All'}
                   </button>
                 </div>
               </form>
@@ -633,14 +800,32 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
   const [parsedData, setParsedData] = useState<(Omit<Order, 'id'> & { error?: string })[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [headerMap, setHeaderMap] = useState<Record<string, number>>({});
 
   const allBuyers = useMemo(() => {
     const fromOrders = existingOrders.map(o => o.buyer);
     return Array.from(new Set([...BUYERS, ...fromOrders])).sort();
   }, [existingOrders]);
 
+  const commonHeaderMaps: Record<string, string[]> = {
+    style: ['style', 'style no', 'style#', 'item', 'model'],
+    poNo: ['po no', 'po number', 'po#', 'order id', 'order no', 'purchase order'],
+    shipDate: ['ship date', 'shipment date', 'delivery date', 'date', 'shipment', 'ex-factory'],
+    color: ['color', 'colour', 'shade'],
+    orderQty: ['order qty', 'qty', 'order quantity', 'quantity', 'total qty', 'order_qty'],
+  };
+
+  const findHeaderIndex = (headers: string[], targetKeys: string[]) => {
+    return headers.findIndex(h => {
+      const normalizedHeader = h.toLowerCase().trim();
+      return targetKeys.some(key => normalizedHeader.includes(key.toLowerCase()));
+    });
+  };
+
   const handleParse = () => {
     const lines = rawText.split('\n').filter(l => l.trim());
+    if (lines.length === 0) return;
+
     const results: (Omit<Order, 'id'> & { error?: string })[] = [];
     const errs: string[] = [];
     
@@ -650,17 +835,50 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
       return;
     }
 
-    lines.forEach((line, idx) => {
+    // Attempt to detect headers from the first line
+    let dataStartIdx = 0;
+    let detectedMap: Record<string, number> = {};
+
+    const firstLineParts = lines[0].split(/\t+/).map(p => p.trim()).filter(p => p !== '');
+    const isHeaderCandidate = firstLineParts.some(p => 
+      ['style', 'po', 'color', 'qty', 'date'].some(key => p.toLowerCase().includes(key))
+    );
+
+    if (isHeaderCandidate) {
+      Object.entries(commonHeaderMaps).forEach(([key, aliases]) => {
+        const idx = findHeaderIndex(firstLineParts, aliases);
+        if (idx !== -1) detectedMap[key] = idx;
+      });
+      dataStartIdx = 1;
+      setHeaderMap(detectedMap);
+    } else {
+      // Use standard mapping if no header detected
+      // Expected: STYLE, PO NO, SHIP DATE, COLOR, ORDER QTY
+      detectedMap = { style: 0, poNo: 1, shipDate: 2, color: 3, orderQty: 4 };
+      setHeaderMap({});
+    }
+
+    const dataLines = lines.slice(dataStartIdx);
+
+    dataLines.forEach((line, idx) => {
       // Excel copy paste is tab separated
       const parts = line.split('\t').map(p => p.trim());
       
-      // Expected: STYLE, PO NO, SHIP DATE, COLOR, ORDER QTY
-      if (parts.length < 5) return; 
+      const getVal = (key: string) => {
+        const index = detectedMap[key];
+        return index !== undefined ? parts[index] : '';
+      };
+
+      const style = getVal('style');
+      const poNo = getVal('poNo');
+      const shipDateStr = getVal('shipDate');
+      const color = getVal('color');
+      const qtyStr = getVal('orderQty');
       
-      const [style, poNo, shipDateStr, color, qtyStr] = parts;
+      if (!style && !poNo) return;
       
-      // Skip header, total rows, or empty rows
-      if (style.toLowerCase() === 'style' || !style || !poNo || !qtyStr || isNaN(Number(qtyStr.replace(/,/g, '')))) return;
+      // Skip summary or header rows
+      if (style?.toLowerCase().includes('style') || !style || !poNo || !qtyStr || isNaN(Number(qtyStr.replace(/,/g, '')))) return;
 
       let rowError = '';
 
@@ -799,15 +1017,23 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
 
               <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider">2. Paste Data from Excel *</label>
-                <p className="text-[10px] text-muted italic mb-2">
-                  Copy columns: STYLE, PO NO, SHIP DATE, COLOR, ORDER QTY
-                </p>
-                <div className="p-2 bg-accent/5 border border-accent/20 rounded text-[10px] text-accent mb-2">
-                  <strong>Note:</strong> Use this for NEW orders only. For production history (Cut, Sewing), use <strong>Historical Import</strong>.
+                <div className="p-3 bg-accent/5 border border-accent/20 rounded-lg space-y-2">
+                  <p className="text-[10px] text-muted leading-relaxed">
+                    <span className="text-accent font-bold">✨ Smart Mapping:</span> Paste your data <span className="underline">including the header row</span>. The app will automatically find Style, PO, Color, and Qty regardless of column order.
+                  </p>
+                  {Object.keys(headerMap).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.keys(headerMap).map(key => (
+                        <span key={key} className="px-1.5 py-0.5 bg-accent/10 text-accent rounded text-[9px] font-bold uppercase ring-1 ring-accent/20">
+                          {key} ✓
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <textarea 
-                  className="fi min-h-[200px] font-mono text-[11px] leading-relaxed"
-                  placeholder="Paste rows here..."
+                  className="fi min-h-[300px] font-mono text-[11px] leading-relaxed"
+                  placeholder="Paste rows (with headers) here..."
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
                 />
