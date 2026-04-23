@@ -11,7 +11,7 @@ interface DPRReportProps {
   getPOInfo: (poNo: string) => POInfo | null;
 }
 
-export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps) {
+export default React.memo(function DPRReport({ orders, entries, getPOInfo }: DPRReportProps) {
   const [reportDate, setReportDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [buyerFilter, setBuyerFilter] = useState('');
 
@@ -42,7 +42,12 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
       groups[key].entries.push(e);
     });
 
-    return Object.values(groups);
+    // Sort groups alphabetically by Buyer then Style
+    return Object.values(groups).sort((a, b) => {
+      const buyerCmp = a.buyer.localeCompare(b.buyer);
+      if (buyerCmp !== 0) return buyerCmp;
+      return a.style.localeCompare(b.style);
+    });
   }, [reportDate, buyerFilter, entries, getPOInfo]);
 
   const grandTotals = useMemo(() => {
@@ -79,9 +84,9 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
     const header = [
       ["ALPHA CLOTHING LTD."],
       ["DAILY PRODUCTION REPORT (DPR)"],
-      [`Date: ${reportDate}`],
+      [`Date: ${safeFormat(reportDate, 'dd-MMM-yy')}`],
       [`Address: Tenguri, BKSP, Ashulia, Savar, Dhaka`],
-      [`Generated At: ${format(new Date(), 'dd MMM yyyy HH:mm:ss')}`],
+      [`Generated At: ${format(new Date(), 'dd-MMM-yy HH:mm:ss')}`],
       []
     ];
 
@@ -135,35 +140,50 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
           </h2>
           <p className="text-[11px] text-muted">Daily Production Report - Grouped by Buyer and Style</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5 shadow-sm">
-            <Calendar size={14} className="text-accent" />
-            <input 
-              type="date" 
-              className="bg-transparent border-none text-[12px] focus:ring-0 p-0 text-fg font-semibold" 
-              value={reportDate} 
-              onChange={e => setReportDate(e.target.value)} 
-            />
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-bold text-muted uppercase tracking-wider">Report Date:</span>
+            <div className="flex items-center gap-2 bg-white dark:bg-card border border-border rounded-lg px-3 py-2 shadow-sm focus-within:ring-2 focus-within:ring-accent/20 transition-all">
+              <Calendar size={16} className="text-accent" />
+              <input 
+                type="date" 
+                className="bg-transparent border-none text-[13px] focus:ring-0 p-0 text-fg font-bold outline-none cursor-pointer" 
+                value={reportDate} 
+                onChange={e => setReportDate(e.target.value)} 
+              />
+            </div>
+            <button 
+              onClick={() => setReportDate(format(new Date(), 'yyyy-MM-dd'))}
+              className="text-[11px] font-bold text-accent hover:underline px-2 py-1 rounded hover:bg-accent/5 transition-colors no-print"
+            >
+              Today
+            </button>
           </div>
-          <select 
-            className="fi w-auto" 
-            value={buyerFilter} 
-            onChange={e => setBuyerFilter(e.target.value)}
-          >
-            <option value="">All Buyers</option>
-            {uniqueBuyers.map(b => <option key={b} value={b}>{b}</option>)}
-          </select>
+          
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-bold text-muted uppercase tracking-wider">Buyer:</span>
+            <select 
+              className="fi w-auto min-w-[140px] text-[13px] font-bold h-10" 
+              value={buyerFilter} 
+              onChange={e => setBuyerFilter(e.target.value)}
+            >
+              <option value="">All Buyers</option>
+              {uniqueBuyers.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
         </div>
       </div>
 
       <div className="bg-bg2/50 backdrop-blur-xl border border-border rounded-2xl p-8 shadow-2xl max-w-[1400px] mx-auto print:shadow-none print:border-none print:p-0 ring-1 ring-white/5">
-        <div className="text-center space-y-2 mb-10">
-          <h1 className="text-3xl font-black tracking-tighter text-fg no-print bg-gradient-to-r from-fg to-muted bg-clip-text text-transparent">ALPHA CLOTHING LTD.</h1>
-          <div className="inline-flex items-center gap-3 px-6 py-2 bg-accent/10 rounded-2xl border border-accent/20 print:bg-transparent print:border-none print:p-0">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse no-print" />
-            <p className="text-[14px] font-black text-accent uppercase tracking-[0.2em] print:text-fg print:text-sm">
-              {reportDate ? safeFormat(reportDate, 'dd-MMM-yy') : '---'} <span className="no-print opacity-60 ml-2">| FINISHING DPR REPORT</span>
-            </p>
+        <div className="text-center space-y-2 mb-10 p-10 bg-white rounded-3xl border-b-4 border-accent shadow-inner no-print">
+          <h1 className="text-4xl font-black tracking-tighter text-slate-900">ALPHA CLOTHING LTD.</h1>
+          <p className="text-[12px] font-black text-slate-500 uppercase tracking-[0.3em]">The Best Look Anytime Anywhere</p>
+          <div className="pt-4 flex items-center justify-center gap-3">
+            <div className="px-4 py-1.5 bg-accent/10 rounded-full border border-accent/20">
+              <p className="text-[12px] font-black text-accent uppercase tracking-widest">
+                {reportDate ? safeFormat(reportDate, 'dd-MMM-yy') : '---'} <span className="opacity-60 ml-2">| DAILY PRODUCTION REPORT</span>
+              </p>
+            </div>
           </div>
         </div>
 
@@ -188,8 +208,9 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
                       <span>Entries: {group.entries.length}</span>
                     </div>
                   </div>
-                  <table className="et">
-                    <thead>
+                  <div className="overflow-x-auto custom-scrollbar">
+                    <table className="et min-w-[1200px] md:min-w-full">
+                      <thead>
                       <tr>
                         <th>Style</th>
                         <th>PO No</th>
@@ -272,8 +293,9 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
                     </tbody>
                   </table>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
 
             {/* Grand Total */}
             <div className="mt-12 p-8 bg-gradient-to-br from-bg2 to-bg border border-border rounded-3xl shadow-2xl flex flex-wrap gap-x-12 gap-y-6 justify-center items-center font-mono ring-1 ring-white/5">
@@ -326,4 +348,4 @@ export default function DPRReport({ orders, entries, getPOInfo }: DPRReportProps
       </div>
     </div>
   );
-}
+});

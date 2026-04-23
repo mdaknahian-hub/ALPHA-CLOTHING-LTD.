@@ -19,8 +19,9 @@ import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry, POInfo } from '../types';
 import { format, parseISO } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
-import { db, addAuditLog } from '../firebase';
+import { db, addAuditLog, auth } from '../firebase';
 import { collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import CollectFromExcelModal from './CollectFromExcelModal';
 
 interface DataEntryProps {
   orders: Order[];
@@ -30,7 +31,7 @@ interface DataEntryProps {
   userProfile: { role: string; permissions?: string[] } | null;
 }
 
-export default function DataEntry({ orders, entries, getPOInfo, addToast, userProfile }: DataEntryProps) {
+export default React.memo(function DataEntry({ orders, entries, getPOInfo, addToast, userProfile }: DataEntryProps) {
   const [formData, setFormData] = useState(() => {
     const saved = localStorage.getItem('production_entry_autosave');
     if (saved) {
@@ -82,6 +83,10 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [displayLimit, setDisplayLimit] = useState(100);
 
   const toggleSelectAll = () => {
     if (selectedIds.length === filteredEntries.length) {
@@ -204,73 +209,49 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
       addToast('Select Date, PO and Color', 'er');
       return;
     }
-
-    // Validation Logic
-    const poEntries = entries.filter(e => e.poNo === formData.poNo && e.color === formData.color && e.id !== editingEntryId);
-    const cumCut = poEntries.reduce((s, e) => s + (e.cut || 0), 0) + formData.cut;
-    const cumSewOut = poEntries.reduce((s, e) => s + (e.sewOut || 0), 0) + formData.sewOut;
-    const cumWashR = poEntries.reduce((s, e) => s + (e.washR || 0), 0) + formData.washR;
-    const cumFinIn = poEntries.reduce((s, e) => s + (e.finIn || 0), 0) + formData.finIn;
-    const cumFinOut = poEntries.reduce((s, e) => s + (e.finOut || 0), 0) + formData.finOut;
-    const cumPoly = poEntries.reduce((s, e) => s + (e.poly || 0), 0) + formData.poly;
-    const cumShipment = poEntries.reduce((s, e) => s + (e.shipment || 0), 0) + formData.shipment;
-    const orderQty = selectedColorRow?.orderQty || 0;
-
-    const violations: string[] = [];
-    if (cumSewOut > cumCut) violations.push('Sewing > Cutting');
-    if (cumWashR > cumSewOut) violations.push('Wash > Sewing');
-    if (cumFinIn > cumWashR) violations.push('Fin Input > Wash');
-    if (cumFinOut > cumFinIn) violations.push('Fin Output > Fin Input');
-    if (cumPoly > orderQty) violations.push('Poly > Order Qty');
-    if (cumShipment > cumPoly) violations.push('Shipment > Poly');
-
-    if (violations.length > 0) {
-      addToast(`Rule Violation: ${violations.join(', ')}`, 'er');
-    }
-
     setLoading(true);
     try {
-      if (editingEntryId !== null) {
-        await updateDoc(doc(db, 'entries', String(editingEntryId)), { ...formData, violations });
-        
-        await addAuditLog(
-          'EDIT', 
-          'ENTRY', 
-          `Updated Entry: PO ${formData.poNo}, Date ${formData.date}`,
-          `/entries/${editingEntryId}`
-        );
+      const dataToSave = {
+        ...formData,
+        updatedAt: new Date().toISOString(),
+        userId: auth.currentUser?.uid || 'anonymous'
+      };
 
-        addToast('Entry updated successfully', 'ok');
+      if (editingEntryId) {
+        await updateDoc(doc(db, 'entries', String(editingEntryId)), dataToSave);
+        addToast('Data stream updated', 'ok');
       } else {
-        // Conditional Mandatory Validation
-        if (formData.poly > 0 && !formData.floor.trim()) {
-          addToast('Floor is mandatory for Poly Entry', 'er');
-          setLoading(false);
-          return;
-        }
-        if ((formData.finIn > 0 || formData.finOut > 0) && !formData.lineNo.trim()) {
-          addToast('Line No is mandatory for Finishing Input/Output', 'er');
-          setLoading(false);
-          return;
-        }
-
-        const docRef = await addDoc(collection(db, 'entries'), { ...formData, violations });
-        
-        await addAuditLog(
-          'ADD', 
-          'ENTRY', 
-          `Added New Entry: PO ${formData.poNo}, Date ${formData.date}`,
-          `/entries/${docRef.id}`
-        );
-
-        addToast('Entry saved successfully', 'ok');
+        await addDoc(collection(db, 'entries'), {
+          ...dataToSave,
+          createdAt: new Date().toISOString()
+        });
+        addToast('Data stream initialized', 'ok');
       }
-      clearForm();
+      
+      await addAuditLog(
+        editingEntryId ? 'EDIT' : 'ADD',
+        'ENTRY',
+        `${editingEntryId ? 'Updated' : 'Created'} Entry: PO ${formData.poNo}, Color ${formData.color}`,
+        `/entries/${editingEntryId || 'new'}`
+      );
+
+      closeForm();
     } catch (err) {
-      addToast('Failed to save entry', 'er');
+      console.error(err);
+      addToast('Failed to save data stream', 'er');
     } finally {
       setLoading(false);
     }
+  };
+
+  const openForm = () => {
+    clearForm();
+    setIsFormOpen(true);
+    setLoading(false);
+  };
+  const closeForm = () => {
+    setIsFormOpen(false);
+    clearForm();
   };
 
   const confirmDelete = async () => {
@@ -317,6 +298,10 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
     });
   }, [entries, filters, getPOInfo]);
 
+  const displayedEntries = useMemo(() => {
+    return filteredEntries.slice(0, displayLimit);
+  }, [filteredEntries, displayLimit]);
+
   const uniquePOs = Array.from(new Set(orders.map(o => o.poNo)));
   const uniqueBuyers = Array.from(new Set(orders.map(o => o.buyer)));
 
@@ -344,335 +329,276 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Keyboard size={20} className="text-accent" />
-            Daily Production Entry
-          </h2>
-          <p className="text-[11px] text-muted">Enter daily output for cutting, sewing, washing, and finishing</p>
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-muted bg-card px-3 py-1.5 rounded-md border border-border">
-          <Activity size={12} className="text-info" />
-          <span className="num">{entries.length}</span> total entries
-        </div>
-      </div>
-
-      {/* Entry Form */}
-      {hasPermission('add-entry') || hasPermission('edit-entry') ? (
-        <div className={cn(
-          "bg-card border rounded-xl p-3 shadow-xl pdf-exclude-form transition-all max-w-5xl",
-          editingEntryId ? "border-accent ring-1 ring-accent/20" : "border-border"
-        )}>
-          <form onSubmit={saveEntry} className="space-y-2.5">
-            <div className="flex items-center justify-between px-1">
-              <h3 className="text-xs font-bold flex items-center gap-2">
-                {editingEntryId ? <TrendingUp size={14} className="text-accent" /> : <Plus size={14} className="text-accent" />}
-                {editingEntryId ? 'Edit Production Entry' : 'New Production Entry'}
-              </h3>
-              {editingEntryId && (
-                <button type="button" onClick={clearForm} className="text-[10px] text-accent hover:underline flex items-center gap-1">
-                  <X size={10} /> Cancel
+    <div className="h-full flex flex-col gap-4 relative">
+      {/* Header Info - Floating & Minimal */}
+      <div className="flex items-center justify-between px-2 pb-4 border-b border-white/5 relative z-30">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 bg-accent/10 rounded-xl flex items-center justify-center text-accent shadow-lg border border-accent/20">
+             <Keyboard size={20} />
+          </div>
+          <div>
+            <div className="flex items-center gap-3">
+              <h2 className="text-xl font-black uppercase tracking-tighter leading-none">Data Entry</h2>
+              <div className="flex items-center gap-2">
+                {hasPermission('add-entry') && (
+                  <button 
+                    type="button"
+                    onClick={openForm}
+                    className="w-7 h-7 bg-accent/10 text-accent rounded-lg flex items-center justify-center hover:bg-accent hover:text-white transition-all border border-accent/30 group shadow-lg pointer-events-auto"
+                    title="Initiate Production Node"
+                  >
+                    <Plus size={16} className="group-hover:rotate-90 transition-transform" />
+                  </button>
+                )}
+                <button 
+                  type="button"
+                  onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+                  className={cn(
+                    "w-7 h-7 rounded-lg flex items-center justify-center transition-all border pointer-events-auto",
+                    isFiltersOpen 
+                      ? "bg-accent text-white border-accent shadow-lg" 
+                      : "bg-white/5 border-white/10 text-muted hover:text-fg hover:bg-white/10"
+                  )}
+                  title="Toggle Scope & Filters"
+                >
+                  <Filter size={14} />
                 </button>
-              )}
-            </div>
-
-            {/* Line 1: Date, PO, Color, Buyer, Style */}
-            <div className="grid grid-cols-5 gap-3">
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-muted uppercase px-1 leading-none mb-1.5">Date *</label>
-                <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="fi h-8 text-xs px-2" required />
-              </div>
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-muted uppercase px-1 leading-none mb-1.5">PO *</label>
-                <input list="po-list" name="poNo" value={formData.poNo} onChange={handleInputChange} className="fi h-8 text-xs px-2" placeholder="PO#" required />
-                <datalist id="po-list">
-                  {uniquePOs.map(po => {
-                    const info = getPOInfo(po);
-                    return <option key={po} value={po}>{info?.buyer} / {info?.style}</option>;
-                  })}
-                </datalist>
-              </div>
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-muted uppercase px-1 leading-none mb-1.5">Color *</label>
-                <select name="color" value={formData.color} onChange={handleInputChange} className="fi h-8 text-xs px-1" required disabled={!formData.poNo}>
-                  <option value="">-- Color --</option>
-                  {poInfo?.colors.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-muted uppercase px-1 leading-none mb-1.5 text-accent">Buyer</label>
-                <input type="text" value={poInfo?.buyer || ''} readOnly className="fi h-8 text-xs bg-accent/5 text-accent font-bold px-2" />
-              </div>
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-muted uppercase px-1 leading-none mb-1.5 text-accent">Style</label>
-                <input type="text" value={poInfo?.style || ''} readOnly className="fi h-8 text-xs bg-accent/5 text-accent font-bold px-2" />
               </div>
             </div>
-
-            {/* Line 2: Line No., Finishing input, Finishing Output */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-accent uppercase px-1 leading-none mb-1.5">Line No</label>
-                <input type="text" name="lineNo" value={formData.lineNo} onChange={handleInputChange} className={cn("fi h-8 text-xs px-2", (formData.finIn > 0 || formData.finOut > 0) && !formData.lineNo && "border-danger ring-1 ring-danger/20")} placeholder="Line #" />
-              </div>
-              {[
-                { label: 'Finishing Input', name: 'finIn', key: 'finIn' },
-                { label: 'Finishing Output', name: 'finOut', key: 'finOut' },
-              ].map(field => (
-                <div key={field.name} className="flex flex-col">
-                  <div className="flex justify-between items-center px-1 mb-1">
-                    <label className="text-[10px] font-bold text-accent uppercase leading-none">{field.label}</label>
-                    <span className="text-[9px] text-muted-foreground font-mono font-bold">{(cumulativeStats[field.key as keyof typeof cumulativeStats] || 0).toLocaleString()} / {(selectedColorRow?.orderQty || 0).toLocaleString() || '0'}</span>
-                  </div>
-                  <input type="number" name={field.name} value={formData[field.name as keyof typeof formData] || ''} onChange={handleInputChange} className="fi h-8 text-xs text-center font-mono border-accent/30" min="0" />
-                </div>
-              ))}
+            <div className="flex items-center gap-2 mt-1">
+               <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+               <p className="text-[9px] font-black text-muted uppercase tracking-[0.2em]">Synchronized Flux Matrix</p>
             </div>
-
-            {/* Line 3: Floor (Select), Poly Entry, Shipment Qty, Achievement % */}
-            <div className="grid grid-cols-4 gap-3">
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-success uppercase px-1 leading-none mb-1.5">Floor</label>
-                <select name="floor" value={formData.floor} onChange={handleInputChange} className={cn("fi h-8 text-xs border-success/30 px-1", formData.poly > 0 && !formData.floor && "border-danger ring-1 ring-danger/20")}>
-                  <option value="">-- Floor --</option>
-                  <option value="Woven">Woven</option>
-                  <option value="Knit">Knit</option>
-                </select>
-              </div>
-              <div className="flex flex-col">
-                <div className="flex justify-between items-center px-1 mb-1">
-                  <label className="text-[10px] font-bold text-success uppercase leading-none">Poly Entry</label>
-                  <span className="text-[9px] text-muted-foreground font-mono font-bold">{(cumulativeStats.poly || 0).toLocaleString()} / {(selectedColorRow?.orderQty || 0).toLocaleString() || '0'}</span>
-                </div>
-                <input type="number" name="poly" value={formData.poly || ''} onChange={handleInputChange} className="fi h-8 text-xs text-center font-mono border-success/30" min="0" />
-              </div>
-              <div className="flex flex-col">
-                <div className="flex justify-between items-center px-1 mb-1">
-                  <label className="text-[10px] font-bold text-info uppercase leading-none">Shipment Qty</label>
-                  <span className="text-[9px] text-muted-foreground font-mono font-bold">{(cumulativeStats.shipment || 0).toLocaleString()} / {(cumulativeStats.poly || 0).toLocaleString()}</span>
-                </div>
-                <input type="number" name="shipment" value={formData.shipment || ''} onChange={handleInputChange} className="fi h-8 text-xs text-center font-mono border-info/30" min="0" />
-              </div>
-              <div className="flex flex-col">
-                <label className="text-[10px] font-bold text-success uppercase px-1 leading-none mb-1.5">Achievement %</label>
-                <div className="fi h-8 text-xs bg-success/10 text-success font-mono font-bold text-center flex items-center justify-center border-success/30">
-                  {achievement}%
-                </div>
-              </div>
-            </div>
-
-            {/* Line 4: Cutting Qty, Sewing Qty, Wash received, Save Production Entry, Clear Form */}
-            <div className="grid grid-cols-5 gap-3 items-end">
-              {[
-                { label: 'Cutting Qty', name: 'cut', key: 'cut' },
-                { label: 'Sewing Output', name: 'sewOut', key: 'sewOut' },
-                { label: 'Wash Received', name: 'washR', key: 'washR' },
-              ].map(field => (
-                <div key={field.name} className="flex flex-col">
-                  <div className="flex justify-between items-center px-1 mb-1">
-                    <label className="text-[10px] font-bold text-muted uppercase leading-none">{field.label}</label>
-                    <span className="text-[9px] text-muted-foreground font-mono font-bold">{(cumulativeStats[field.key as keyof typeof cumulativeStats] || 0).toLocaleString()} / {(selectedColorRow?.orderQty || 0).toLocaleString() || '0'}</span>
-                  </div>
-                  <input type="number" name={field.name} value={formData[field.name as keyof typeof formData] || ''} onChange={handleInputChange} className="fi h-8 text-xs text-center font-mono" min="0" />
-                </div>
-              ))}
-              <button type="submit" className="btn btn-p btn-s flex items-center justify-center gap-1.5 h-8 text-[11px] px-3 font-bold">
-                <Save size={14} /> Save
-              </button>
-              <button type="button" onClick={clearForm} className="btn btn-o btn-s flex items-center justify-center gap-1.5 h-8 text-[11px] px-3 font-bold">
-                <Eraser size={14} /> Clear
-              </button>
-            </div>
-          </form>
+          </div>
         </div>
-      ) : (
-        <div className="bg-accent/5 border border-accent/20 rounded-xl p-8 text-center">
-          <AlertTriangle size={32} className="mx-auto text-accent mb-3 opacity-50" />
-          <h3 className="text-sm font-bold text-fg mb-1">View Only Mode</h3>
-          <p className="text-xs text-muted">You do not have permission to add or edit production entries.</p>
-        </div>
-      )}
 
-      {/* Filters */}
-      <div className="bg-card border border-border rounded-lg p-3 flex flex-wrap gap-3 items-center shadow-md">
-        <div className="flex items-center gap-2 text-xs font-bold text-muted uppercase tracking-wider">
-          <Filter size={14} className="text-accent" />
-          Filter Entries:
+        <div className="flex items-center gap-3 relative z-50">
+           <button 
+             type="button" 
+             onClick={() => {
+               setIsCollectModalOpen(true);
+             }}
+             className="h-10 px-5 bg-accent/20 text-accent border border-accent/40 rounded-xl flex items-center gap-2 hover:bg-accent hover:text-white transition-all group shadow-[0_0_15px_rgba(var(--color-accent),0.2)] active:scale-95"
+           >
+             <Database size={16} className="group-hover:rotate-12 transition-transform" />
+             <span className="text-[10px] font-black uppercase tracking-widest">Collect From Library</span>
+           </button>
         </div>
-        <input 
-          type="date" 
-          className="fi w-auto" 
-          value={filters.date} 
-          onChange={e => setFilters(prev => ({ ...prev, date: e.target.value }))} 
-        />
-        <select 
-          className="fi w-auto" 
-          value={filters.poNo} 
-          onChange={e => setFilters(prev => ({ ...prev, poNo: e.target.value }))}
-        >
-          <option value="">All POs</option>
-          {uniquePOs.map(po => <option key={po} value={po}>{po}</option>)}
-        </select>
-        <select 
-          className="fi w-auto" 
-          value={filters.buyer} 
-          onChange={e => setFilters(prev => ({ ...prev, buyer: e.target.value }))}
-        >
-          <option value="">All Buyers</option>
-          {uniqueBuyers.map(b => <option key={b} value={b}>{b}</option>)}
-        </select>
-        <input 
-          type="text" 
-          placeholder="Color..." 
-          className="fi w-32" 
-          value={filters.color}
-          onChange={e => setFilters(prev => ({ ...prev, color: e.target.value }))}
-        />
-        <button 
-          className="btn btn-o btn-s" 
-          onClick={() => setFilters({ date: '', poNo: '', buyer: '', color: '' })}
-        >
-          <X size={12} /> Reset
-        </button>
-
-        {selectedIds.length > 0 && hasPermission('delete-entry') && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            onClick={() => setBulkDeleteConfirm(true)}
-            className="btn btn-d btn-s gap-2 ml-auto"
-          >
-            <Trash2 size={12} /> Delete Selected ({selectedIds.length})
-          </motion.button>
-        )}
       </div>
 
-      {/* Entries Table */}
-      <div className="border border-border rounded-lg overflow-hidden shadow-2xl">
-        <div className="overflow-x-auto max-h-[45vh]">
-          <table className="et">
-            <thead>
+
+      {/* Filters (Floating Bar) */}
+      <AnimatePresence>
+        {isFiltersOpen && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-bg2/40 backdrop-blur-2xl border border-border/20 p-4 rounded-2xl flex flex-wrap gap-4 items-end shadow-2xl relative z-40"
+          >
+            <div className="flex flex-col gap-2">
+              <label className="text-[9px] font-black uppercase tracking-widest text-muted-foreground ml-1">Temporal Filter</label>
+              <input 
+                type="date" 
+                className="fi h-10 w-44 bg-bg/50 border-border/20 text-xs font-mono rounded-xl px-4"
+                value={filters.date} 
+                onChange={e => setFilters(prev => ({ ...prev, date: e.target.value }))} 
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <label className="text-[9px] font-black uppercase tracking-widest text-muted-foreground ml-1">Entity Reference</label>
+              <input 
+                type="text" 
+                placeholder="PO Number..."
+                className="fi h-10 w-44 bg-bg/50 border-border/20 text-xs font-mono rounded-xl px-4"
+                value={filters.poNo} 
+                onChange={e => setFilters(prev => ({ ...prev, poNo: e.target.value }))}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <label className="text-[9px] font-black uppercase tracking-widest text-muted-foreground ml-1">Buyer Node</label>
+              <select 
+                className="fi h-10 w-44 bg-bg/50 border-border/20 text-xs font-black rounded-xl px-4 cursor-pointer"
+                value={filters.buyer} 
+                onChange={e => setFilters(prev => ({ ...prev, buyer: e.target.value }))}
+              >
+                <option value="">All Buyers</option>
+                {uniqueBuyers.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <label className="text-[9px] font-black uppercase tracking-widest text-muted-foreground ml-1">Chroma Search</label>
+              <input 
+                type="text" 
+                placeholder="Color Identification..." 
+                className="fi h-10 w-44 bg-bg/50 border-border/20 text-xs rounded-xl px-4"
+                value={filters.color}
+                onChange={e => setFilters(prev => ({ ...prev, color: e.target.value }))}
+              />
+            </div>
+            <button 
+              className="h-10 w-10 bg-white/5 hover:bg-white/10 text-muted hover:text-fg rounded-xl flex items-center justify-center transition-all border border-border/20"
+              onClick={() => setFilters({ date: '', poNo: '', buyer: '', color: '' })}
+            >
+              <X size={16} />
+            </button>
+
+            {selectedIds.length > 0 && hasPermission('delete-entry') && (
+              <motion.button
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                onClick={() => setBulkDeleteConfirm(true)}
+                className="h-10 px-6 bg-danger/10 hover:bg-danger text-danger hover:text-slate-950 border border-danger/20 rounded-xl flex items-center gap-3 transition-all ml-auto text-[10px] font-black uppercase tracking-widest"
+              >
+                <Trash2 size={14} /> Purge Block ({selectedIds.length})
+              </motion.button>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main Experience Grid (Table) */}
+      <div className="flex-1 min-h-0 bg-card/10 border border-border/10 rounded-2xl overflow-hidden flex flex-col shadow-inner">
+        <div className="overflow-x-auto overflow-y-auto no-scrollbar custom-scrollbar relative">
+          <table className="w-full border-separate border-spacing-0 min-w-[2000px]">
+            <thead className="sticky top-0 z-20 backdrop-blur-2xl bg-bg2/90">
               <tr>
-                <th className="w-10">
+                <th className="w-12 p-3 border-b border-border/20">
                   <input 
                     type="checkbox" 
-                    className="accent-accent"
+                    className="accent-accent w-4 h-4 rounded cursor-pointer"
                     checked={selectedIds.length === filteredEntries.length && filteredEntries.length > 0}
                     onChange={toggleSelectAll}
                   />
                 </th>
-                <th className="w-10">#</th>
-                <th>Date</th>
-                <th>PO No</th>
-                <th>Buyer</th>
-                <th>Style</th>
-                <th>Color</th>
-                <th>Line No</th>
-                <th>Floor</th>
-                <th>Cutting</th>
-                <th>Sew Out</th>
-                <th className="bg-bg2/30 text-[9px] uppercase">Sew WIP</th>
-                <th>Wash Recv</th>
-                <th className="bg-bg2/30 text-[9px] uppercase">Wash WIP</th>
-                <th>Fin In</th>
-                <th>Fin Out</th>
-                <th className="bg-bg2/30 text-[9px] uppercase">Fin WIP</th>
-                <th>Poly</th>
-                <th>Shipment</th>
-                <th>Ach%</th>
-                <th>Act</th>
+                <th className="w-12 p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted">ID</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Production Date</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">PO Reference</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Buyer</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Style Node</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Color Chromatics</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Floor Unit</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Line Matrix</th>
+                
+                {/* Metrics */}
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">CUT</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">SEW</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">WIP (S)</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3 text-accent">WASH</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">WIP (W)</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3 text-accent-foreground">FIN IN</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3 text-accent-foreground">FIN OUT</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">WIP (F)</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-success bg-white/3">POLY</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-info bg-info/5">SHIPMENT</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted">ACCURACY</th>
+                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-center sticky right-0 bg-bg2/90">Protocol</th>
               </tr>
             </thead>
-            <tbody>
-              {filteredEntries.map((e, i) => {
+            <tbody className="divide-y divide-border/5">
+              {displayedEntries.map((e, i) => {
                 const info = getPOInfo(e.poNo);
                 const colorRow = info?.colorRows.find(r => r.color === e.color);
                 const ach = colorRow?.orderQty ? Math.round(((e.poly || 0) / colorRow.orderQty) * 100 * 10) / 10 : 0;
+                const isSelected = selectedIds.includes(String(e.id));
+                
                 return (
-                  <tr key={e.id} className={cn(e.violations && e.violations.length > 0 ? "bg-danger/5" : "", selectedIds.includes(String(e.id)) ? "bg-accent/10" : "")}>
-                    <td>
-                      <input 
-                        type="checkbox" 
-                        className="accent-accent"
-                        checked={selectedIds.includes(String(e.id))}
-                        onChange={() => toggleSelect(String(e.id))}
-                      />
+                  <tr 
+                    key={e.id} 
+                    className={cn(
+                      "group hover:bg-white/[0.04] transition-colors",
+                      e.violations && e.violations.length > 0 ? "bg-danger/[0.03]" : "",
+                      isSelected ? "bg-accent/[0.05]" : ""
+                    )}
+                  >
+                    <td className="p-3 text-center">
+                       <input 
+                         type="checkbox" 
+                         className="accent-accent w-4 h-4 rounded cursor-pointer"
+                         checked={isSelected}
+                         onChange={() => toggleSelect(String(e.id))}
+                       />
                     </td>
-                    <td className="num text-muted">
-                      {e.violations && e.violations.length > 0 ? (
-                        <div className="group relative flex justify-center">
-                          <AlertTriangle size={12} className="text-danger" />
-                          <div className="absolute bottom-full mb-2 hidden group-hover:block z-50 bg-danger text-white text-[9px] p-1.5 rounded shadow-lg whitespace-nowrap">
-                            {e.violations.join(', ')}
-                          </div>
-                        </div>
-                      ) : i + 1}
+                    <td className="p-3 text-center num text-[9px] text-muted-foreground">{i + 1}</td>
+                    <td className="p-3 font-mono text-[10px] text-muted-foreground">{safeFormat(e.date)}</td>
+                    <td className="p-3 font-black text-accent text-[10px] tracking-widest">{e.poNo}</td>
+                    <td className="p-3 font-black uppercase text-[10px] text-fg/80">{info?.buyer || '—'}</td>
+                    <td className="p-3 font-mono text-[10px] opacity-60 italic">{info?.style || '—'}</td>
+                    <td className="p-3">
+                       <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full", e.color.toLowerCase().includes('white') ? "bg-white" : e.color.toLowerCase().includes('black') ? "bg-slate-900 border border-white/20" : "bg-accent")} />
+                          <span className="text-[10px] font-black uppercase tracking-widest opacity-80">{e.color}</span>
+                       </div>
                     </td>
-                    <td className="whitespace-nowrap">{safeFormat(e.date)}</td>
-                    <td className="font-mono text-accent font-bold text-[10px]">{e.poNo}</td>
-                    <td className="font-semibold">{info?.buyer || '—'}</td>
-                    <td className="font-mono text-[10px]">{info?.style || '—'}</td>
-                    <td className="text-[11px]">{e.color}</td>
-                    <td className="text-[11px] text-accent font-bold">{e.lineNo || '—'}</td>
-                    <td className="text-[11px] text-success font-bold">{e.floor || '—'}</td>
-                    <td className="num">{(e.cut || 0).toLocaleString()}</td>
-                    <td className="num">{(e.sewOut || 0).toLocaleString()}</td>
-                    <td className="num bg-bg2/10">
-                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.cut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0))}>
+                    <td className="p-3 text-[10px] font-black text-success/70 uppercase">{e.floor || '—'}</td>
+                    <td className="p-3 text-[10px] font-black text-accent/70 uppercase font-mono">{e.lineNo || '—'}</td>
+                    
+                    <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-60">{(e.cut || 0).toLocaleString()}</td>
+                    <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-60">{(e.sewOut || 0).toLocaleString()}</td>
+                    <td className="p-3 num bg-white/[0.01]">
+                       <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.cut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0))}>
                         {((wipMap[`${e.poNo}-${e.color}`]?.cut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0)).toLocaleString()}
                       </span>
                     </td>
-                    <td className="num">{(e.washR || 0).toLocaleString()}</td>
-                    <td className="num bg-bg2/10">
-                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.washR || 0))}>
+                    <td className="p-3 num text-[11px] font-black bg-white/[0.01] text-accent">{(e.washR || 0).toLocaleString()}</td>
+                    <td className="p-3 num bg-white/[0.01]">
+                       <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.washR || 0))}>
                         {((wipMap[`${e.poNo}-${e.color}`]?.sewOut || 0) - (wipMap[`${e.poNo}-${e.color}`]?.washR || 0)).toLocaleString()}
                       </span>
                     </td>
-                    <td className="num">{(e.finIn || 0).toLocaleString()}</td>
-                    <td className="num">{(e.finOut || 0).toLocaleString()}</td>
-                    <td className="num bg-bg2/10">
-                      <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.finIn || 0) - (wipMap[`${e.poNo}-${e.color}`]?.finOut || 0))}>
+                    <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-80">{(e.finIn || 0).toLocaleString()}</td>
+                    <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-80">{(e.finOut || 0).toLocaleString()}</td>
+                    <td className="p-3 num bg-white/[0.01]">
+                       <span className={getWIPClass((wipMap[`${e.poNo}-${e.color}`]?.finIn || 0) - (wipMap[`${e.poNo}-${e.color}`]?.finOut || 0))}>
                         {((wipMap[`${e.poNo}-${e.color}`]?.finIn || 0) - (wipMap[`${e.poNo}-${e.color}`]?.finOut || 0)).toLocaleString()}
                       </span>
                     </td>
-                    <td className="num text-success font-bold">{(e.poly || 0).toLocaleString()}</td>
-                    <td className="num text-info font-bold">{(e.shipment || 0).toLocaleString()}</td>
-                    <td className="num">
-                      <span className={cn(
-                        "font-bold",
-                        ach >= 80 ? "text-success" : ach >= 50 ? "text-accent" : "text-danger"
-                      )}>
-                        {ach}%
-                      </span>
+                    <td className="p-3 num text-[11px] font-black text-success bg-success/5 border-l border-success/10 group-hover:bg-success/10 transition-colors">{(e.poly || 0).toLocaleString()}</td>
+                    <td className="p-3 num text-[11px] font-black text-info bg-info/5 border-l border-info/10 group-hover:bg-info/10 transition-colors">{(e.shipment || 0).toLocaleString()}</td>
+                    <td className="p-3 text-center">
+                       <div className="flex flex-col items-center gap-1">
+                          <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden max-w-[50px]">
+                             <motion.div initial={{ width: 0 }} animate={{ width: `${Math.min(ach, 100)}%` }} className={cn("h-full", ach >= 80 ? "bg-success" : ach >= 50 ? "bg-accent" : "bg-danger")} />
+                          </div>
+                          <span className={cn("text-[9px] font-black italic", ach >= 80 ? "text-success" : ach >= 50 ? "text-accent" : "text-danger")}>{ach}%</span>
+                       </div>
                     </td>
-                    <td>
-                      <div className="flex gap-1 justify-center">
-                        {hasPermission('edit-entry') && (
-                          <button className="btn btn-o btn-s" onClick={() => editEntry(e)}>
-                            <Pencil size={12} />
+                    <td className="p-3 text-center sticky right-0 bg-bg backdrop-blur-md border-l border-border/10">
+                       <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => editEntry(e)} className="w-7 h-7 bg-bg2/80 rounded-lg flex items-center justify-center text-muted hover:text-accent hover:bg-accent/10 transition-all">
+                             <Pencil size={12} />
                           </button>
-                        )}
-                        {hasPermission('delete-entry') && (
-                          <button className="btn btn-d btn-s" onClick={() => setDeleteConfirmId(e.id)}>
-                            <Trash2 size={12} />
+                          <button onClick={() => setDeleteConfirmId(e.id)} className="w-7 h-7 bg-bg2/80 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-all">
+                             <Trash2 size={12} />
                           </button>
-                        )}
-                        {!hasPermission('edit-entry') && !hasPermission('delete-entry') && (
-                          <span className="text-[10px] text-muted italic">View Only</span>
-                        )}
-                      </div>
+                       </div>
                     </td>
                   </tr>
                 );
               })}
+              {filteredEntries.length > displayLimit && (
+                <tr>
+                   <td colSpan={21} className="p-6 text-center">
+                      <button 
+                         onClick={() => setDisplayLimit(prev => prev + 200)}
+                         className="px-8 py-3 bg-white/5 border border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest text-muted hover:text-fg hover:bg-white/10 transition-all"
+                      >
+                         Load More Data Stream ({filteredEntries.length - displayLimit} Remaining)
+                      </button>
+                   </td>
+                </tr>
+              )}
               {filteredEntries.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="py-20 text-center text-muted">
-                    <Keyboard size={40} className="mx-auto mb-2 opacity-20" />
-                    No production entries found for the selected filters.
-                  </td>
+                   <td colSpan={21} className="py-32 text-center">
+                      <div className="flex flex-col items-center gap-3 opacity-20">
+                         <div className="w-20 h-20 border-2 border-dashed border-fg rounded-3xl flex items-center justify-center">
+                            <Database size={40} />
+                         </div>
+                         <h3 className="text-sm font-black uppercase tracking-[0.3em]">No Data Streams Found</h3>
+                         <p className="text-[10px] font-black uppercase tracking-widest text-muted">Initialize node entry to begin processing</p>
+                      </div>
+                   </td>
                 </tr>
               )}
             </tbody>
@@ -680,23 +606,311 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
         </div>
       </div>
 
+      {/* Floating Modal (The New Entry Form) */}
+      <AnimatePresence>
+        {(isFormOpen || editingEntryId) && (
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center overflow-hidden">
+            <motion.div 
+              key="modal-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeForm}
+              className="absolute inset-0 bg-slate-950/90 backdrop-blur-md"
+            />
+            <motion.div 
+              key="modal-content"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-4xl h-[90vh] bg-bg2 border border-border/20 rounded-3xl shadow-3xl flex flex-col overflow-hidden m-4"
+            >
+              <div className="p-6 border-b border-border/20 flex items-center justify-between bg-bg/40 backdrop-blur-xl">
+                 <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-accent/20 rounded-2xl flex items-center justify-center text-accent shadow-lg border border-accent/30">
+                       {editingEntryId ? <Pencil size={24} /> : <Plus size={24} />}
+                    </div>
+                    <div>
+                       <h3 className="text-xl font-black uppercase tracking-tight leading-none">
+                          {editingEntryId ? 'Protocol Modification' : 'Node Initialization'}
+                       </h3>
+                       <p className="text-[10px] font-black text-muted uppercase tracking-widest mt-1">Data Stream Integration Interface</p>
+                    </div>
+                 </div>
+                 <button onClick={closeForm} className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center text-muted hover:text-fg transition-all">
+                    <X size={20} />
+                 </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                {/* Live Production Status Overview */}
+                {formData.poNo && formData.color && poInfo && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-8 grid grid-cols-2 lg:grid-cols-4 gap-4 p-5 bg-bg/50 border border-white/5 rounded-2xl shadow-inner relative overflow-hidden"
+                  >
+                    <div className="absolute top-0 right-0 p-4 opacity-[0.03]">
+                       <TrendingUp size={80} />
+                    </div>
+                    
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] font-black text-muted uppercase tracking-widest">Buyer Node</span>
+                      <span className="text-xs font-black uppercase text-accent">{poInfo.buyer}</span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] font-black text-muted uppercase tracking-widest">Order Capacity</span>
+                      <span className="text-xs font-black font-mono">{(selectedColorRow?.orderQty || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] font-black text-muted uppercase tracking-widest">Achieved Quant</span>
+                      <span className="text-xs font-black font-mono text-success">{cumulativeStats.poly.toLocaleString()}</span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] font-black text-muted uppercase tracking-widest">Efficiency</span>
+                      <span className="text-xs font-black font-mono text-info">{achievement}%</span>
+                    </div>
+                  </motion.div>
+                )}
+
+                <form onSubmit={saveEntry} className="space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                     <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Temporal Anchor (Date)</label>
+                        <input 
+                          type="date" 
+                          name="date"
+                          value={formData.date} 
+                          onChange={handleInputChange} 
+                          className="fi h-12 bg-bg border-border/20 text-xs font-mono font-black rounded-2xl px-5 focus:ring-2 focus:ring-accent/20 transition-all"
+                          required 
+                        />
+                     </div>
+                     <div className="flex flex-col gap-2 relative">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Universal PO Identifier</label>
+                        <div className="relative group">
+                          <Search size={16} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted/30 group-focus-within:text-accent transition-colors" />
+                          <input 
+                            list="po-list-modal" 
+                            name="poNo" 
+                            value={formData.poNo} 
+                            onChange={handleInputChange} 
+                            className="fi h-12 bg-bg border-border/20 text-sm font-black rounded-2xl pl-12 pr-5 focus:ring-2 focus:ring-accent/20 transition-all font-mono"
+                            placeholder="Enter PO ID Node..."
+                            required 
+                          />
+                          <datalist id="po-list-modal">
+                            {uniquePOs.map(po => {
+                              const info = getPOInfo(po);
+                              return <option key={po} value={po}>{info?.buyer} / {info?.style}</option>;
+                            })}
+                          </datalist>
+                        </div>
+                     </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {formData.poNo && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4 border-t border-border/10"
+                      >
+                         <div className="flex flex-col gap-2">
+                            <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Buyer Spectrum</label>
+                            <div className="h-12 bg-accent/5 border border-accent/20 rounded-2xl flex items-center px-5 text-[11px] font-black text-accent uppercase tracking-widest">
+                               {poInfo?.buyer || 'IDENTITY NOT FOUND'}
+                            </div>
+                         </div>
+                         <div className="flex flex-col gap-2">
+                            <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Selection Chromatics (Color)</label>
+                            <select 
+                              name="color" 
+                              value={formData.color} 
+                              onChange={handleInputChange} 
+                              className="fi h-12 bg-bg border-border/20 text-xs font-black rounded-2xl px-5 cursor-pointer"
+                              required
+                            >
+                              <option value="">-- Choose Spectral Value --</option>
+                              {poInfo?.colors.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                         </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div className="h-px bg-border/10 my-8" />
+
+                  {formData.poNo && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="mb-8 p-6 bg-accent/5 border border-accent/10 rounded-[32px] overflow-hidden"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-6">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-accent/10 rounded-2xl flex items-center justify-center text-accent ring-1 ring-accent/20">
+                            <Activity size={24} />
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-black text-accent uppercase tracking-widest">LIVE DATA ANCHOR</p>
+                            <h4 className="text-sm font-black uppercase text-fg leading-none mt-1">
+                              {poInfo?.buyer || 'PENDING'} | {formData.poNo} {formData.color ? `| ${formData.color}` : ''}
+                            </h4>
+                          </div>
+                        </div>
+
+                        {formData.color ? (
+                          <div className="flex items-center gap-8">
+                            <div className="flex flex-col items-center">
+                              <span className="text-[9px] font-black text-muted uppercase tracking-widest">TOTAL ORDER</span>
+                              <span className="text-lg font-black num text-fg">{(selectedColorRow?.orderQty || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="w-px h-10 bg-border/20" />
+                            <div className="flex flex-col items-center">
+                              <span className="text-[9px] font-black text-muted uppercase tracking-widest">TOTAL ACHIEVED (POLY)</span>
+                              <span className="text-lg font-black num text-success">{(cumulativeStats.poly || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="w-px h-10 bg-border/20" />
+                            <div className="flex flex-col items-center">
+                              <span className="text-[9px] font-black text-muted uppercase tracking-widest">REMAINING</span>
+                              <span className="text-lg font-black num text-danger">
+                                {Math.max(0, (selectedColorRow?.orderQty || 0) - cumulativeStats.poly).toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="w-px h-10 bg-border/20" />
+                            <div className="flex flex-col items-center">
+                              <span className="text-[9px] font-black text-muted uppercase tracking-widest">EFFICIENCY</span>
+                              <span className="text-lg font-black num text-accent">{achievement}%</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-[10px] font-black text-muted uppercase tracking-[0.2em] animate-pulse">
+                            Waiting for Spectral Color Assignment...
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                    {[
+                      { label: 'Cutting Node', name: 'cut', theme: 'muted' },
+                      { label: 'Sewing Node', name: 'sewOut', theme: 'muted' },
+                      { label: 'Wash Node', name: 'washR', theme: 'accent' },
+                      { label: 'Fin Inbound', name: 'finIn', theme: 'accent' },
+                      { label: 'Fin Outbound', name: 'finOut', theme: 'accent' },
+                      { label: 'Poly Matrix', name: 'poly', theme: 'success' },
+                      { label: 'Final Shipment', name: 'shipment', theme: 'info' },
+                    ].map(field => (
+                      <div key={field.name} className="flex flex-col gap-2">
+                        <label className={cn("text-[9px] font-black uppercase tracking-widest ml-1 opacity-70", `text-${field.theme}`)}>{field.label}</label>
+                        <input 
+                          type="number" 
+                          name={field.name}
+                          value={formData[field.name as keyof typeof formData] || ''} 
+                          onChange={handleInputChange} 
+                          className={cn("fi h-12 bg-bg text-center text-sm font-black num rounded-2xl border-border/20 focus:ring-2 transition-all", `focus:ring-${field.theme}/20`)}
+                          min="0" 
+                        />
+                      </div>
+                    ))}
+                    <div className="flex flex-col gap-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest ml-1 text-accent opacity-70">Node Line ID</label>
+                        <input 
+                          type="text" 
+                          name="lineNo"
+                          value={formData.lineNo} 
+                          onChange={handleInputChange} 
+                          className="fi h-12 bg-bg text-center text-xs font-black rounded-2xl border-border/20 focus:ring-2 focus:ring-accent/20 transition-all font-mono"
+                          placeholder="LINE-00"
+                        />
+                    </div>
+                  </div>
+
+                  {formData.poNo && (
+                     <div className="mt-8 flex items-center justify-center">
+                        <div className="px-6 py-2 bg-bg border border-border/20 rounded-full flex items-center gap-4 shadow-inner">
+                           <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black text-muted uppercase tracking-widest">Selected Matrix:</span>
+                              <span className="text-[10px] font-black text-accent uppercase">{poInfo?.buyer || '...'} / {formData.poNo} {formData.color ? `/ ${formData.color}` : ''}</span>
+                           </div>
+                           {formData.color && (
+                             <>
+                               <div className="h-4 w-px bg-border/20" />
+                               <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-black text-muted uppercase tracking-widest">Achieved:</span>
+                                  <span className="text-[10px] font-black text-success num">{achievement}%</span>
+                               </div>
+                               <div className="h-4 w-px bg-border/20" />
+                               <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-black text-muted uppercase tracking-widest">Balance:</span>
+                                  <span className="text-[10px] font-black text-danger num">{Math.max(0, (selectedColorRow?.orderQty || 0) - cumulativeStats.poly).toLocaleString()}</span>
+                               </div>
+                             </>
+                           )}
+                        </div>
+                     </div>
+                  )}
+
+                  <div className="pt-10 flex gap-4">
+                     <button type="submit" className="flex-1 h-16 bg-accent text-slate-950 rounded-2xl shadow-xl shadow-accent/20 flex items-center justify-center gap-3 text-xs font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all" disabled={loading}>
+                        <Save size={20} />
+                        {loading ? 'Processing Stream...' : (editingEntryId ? 'Commit Changes' : 'Initialize Node')}
+                     </button>
+                     <button type="button" onClick={clearForm} className="w-16 h-16 bg-white/5 border border-border/20 rounded-2xl flex items-center justify-center text-muted hover:text-fg hover:bg-white/10 transition-all">
+                        <Eraser size={24} />
+                     </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div className="h-6" /> {/* Spacer for FAB */}
+
+      {/* Collect from Excel Modal */}
+      <AnimatePresence>
+        {isCollectModalOpen && (
+          <CollectFromExcelModal 
+            type="entries"
+            orders={orders}
+            entries={entries}
+            onClose={() => setIsCollectModalOpen(false)}
+            onPushToForm={(data) => {
+              setFormData(prev => ({
+                ...prev,
+                ...data
+              }));
+              addToast('Target Locked: Data synced to local matrix', 'ok');
+            }}
+            onSuccess={(count) => {
+              addToast(`Sync Protocol Synchronized: ${count} entities migrated`, 'ok');
+              setIsCollectModalOpen(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirmId !== null && (
-          <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[5000] flex items-center justify-center p-4 overflow-y-auto no-scrollbar">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setDeleteConfirmId(null)}
-              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/90 backdrop-blur-md"
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               transition={{ type: "spring", damping: 25, stiffness: 400 }}
-              className="relative bg-card border border-border rounded-xl shadow-2xl p-6 max-w-sm w-full text-center"
+              className="relative bg-card border border-border/40 rounded-[2rem] shadow-3xl p-8 max-w-sm w-full text-center z-50 my-auto"
             >
               <Trash2 size={40} className="mx-auto text-danger mb-4" />
               <h3 className="text-lg font-bold mb-2">Confirm Delete</h3>
@@ -713,20 +927,20 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
       {/* Bulk Delete Confirmation Modal */}
       <AnimatePresence>
         {bulkDeleteConfirm && (
-          <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[5000] flex items-center justify-center p-4 overflow-y-auto no-scrollbar">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setBulkDeleteConfirm(false)}
-              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+              className="fixed inset-0 bg-black/90 backdrop-blur-md"
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               transition={{ type: "spring", damping: 25, stiffness: 400 }}
-              className="relative bg-card border border-border rounded-xl shadow-2xl p-6 max-w-sm w-full text-center"
+              className="relative bg-card border border-border/40 rounded-[2rem] shadow-3xl p-8 max-w-sm w-full text-center z-50 my-auto"
             >
               <Trash2 size={40} className="mx-auto text-danger mb-4" />
               <h3 className="text-lg font-bold mb-2">Confirm Bulk Delete</h3>
@@ -743,4 +957,4 @@ export default function DataEntry({ orders, entries, getPOInfo, addToast, userPr
       </AnimatePresence>
     </div>
   );
-}
+});

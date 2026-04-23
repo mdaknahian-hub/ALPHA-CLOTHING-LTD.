@@ -62,17 +62,16 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      let role = get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-      return isAuthenticated() &&
-        (role == 'admin' || role == 'super-admin' ||
-          (request.auth.token.email == "aknahian@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        request.auth.token.email == "aknahian@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super-admin'))
+      );
     }
 
     function hasPermission(permission) {
-      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      return isAuthenticated() && 
-             (userData.role == 'admin' || userData.role == 'super-admin' || 
-              ('permissions' in userData && permission in userData.permissions));
+      return isAdmin();
     }
 
     function isValidOrder(data) {
@@ -106,6 +105,15 @@ service cloud.firestore {
              data.output is number &&
              data.orderQty is number &&
              data.userId == request.auth.uid;
+    }
+
+    function isValidExcelFile(data) {
+      return data.keys().hasAll(['fileName', 'uploadedAt', 'uploadedBy', 'rowCount', 'content']) &&
+             data.fileName is string &&
+             data.uploadedAt is string &&
+             data.uploadedBy is string &&
+             data.rowCount is number &&
+             data.content is string;
     }
 
     // ===============================================================
@@ -143,7 +151,22 @@ service cloud.firestore {
     match /auditLogs/{logId} {
       allow read: if isAdmin();
       allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
-      allow delete: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /dashboard_configs/{userId} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    match /settings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /excel_files/{fileId} {
+      allow read: if isAuthenticated();
+      allow create: if hasPermission('manage-orders') && isValidExcelFile(request.resource.data);
+      allow delete: if hasPermission('manage-orders');
       allow update: if false;
     }
   }

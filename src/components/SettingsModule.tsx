@@ -44,6 +44,7 @@ interface SettingsProps {
   setTheme: (t: 'dark' | 'light') => void;
   appSettings: any;
   updateAppSettings: (s: any) => void;
+  onLogout: () => Promise<void>;
 }
 
 const FONT_FAMILIES = [
@@ -68,7 +69,8 @@ export default function SettingsModule({
   currentTheme, 
   setTheme,
   appSettings,
-  updateAppSettings
+  updateAppSettings,
+  onLogout
 }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<'profile' | 'users' | 'theme' | 'layout' | 'about' | 'health'>('profile');
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -83,10 +85,9 @@ export default function SettingsModule({
     return () => unsub();
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogoutClick = async () => {
     if (window.confirm('Are you sure you want to logout?')) {
-      await signOut(auth);
-      window.location.reload();
+      await onLogout();
     }
   };
 
@@ -111,6 +112,13 @@ export default function SettingsModule({
     }
     if (key === 'fontFamily') {
       document.documentElement.style.setProperty('--font-sans', value);
+    }
+    if (key === 'highContrast') {
+      if (value) {
+        document.documentElement.classList.add('contrast');
+      } else {
+        document.documentElement.classList.remove('contrast');
+      }
     }
   };
 
@@ -171,7 +179,7 @@ export default function SettingsModule({
         </div>
 
         <button 
-          onClick={handleLogout}
+          onClick={handleLogoutClick}
           className="w-full mt-6 flex items-center justify-center gap-3 p-4 rounded-2xl bg-danger/10 border border-danger/20 text-danger font-black uppercase text-xs tracking-[0.2em] hover:bg-danger hover:text-white transition-all"
         >
           <LogOut size={18} />
@@ -311,6 +319,29 @@ export default function SettingsModule({
                       </div>
                     </div>
                   </div>
+                </div>
+
+                <div className="bg-card border border-border rounded-[40px] p-8 shadow-xl">
+                   <div className="flex items-center justify-between">
+                      <div>
+                         <h4 className="text-sm font-black uppercase tracking-widest flex items-center gap-3">
+                            <Shield size={18} className="text-accent" /> Ultra High Contrast
+                         </h4>
+                         <p className="text-[10px] text-muted font-bold mt-1 uppercase">Pure black & white mode for extreme readability</p>
+                      </div>
+                      <button 
+                        onClick={() => updateSetting('highContrast', !appSettings.highContrast)}
+                        className={cn(
+                          "w-16 h-8 rounded-full relative transition-all duration-300",
+                          appSettings.highContrast ? "bg-accent" : "bg-white/10"
+                        )}
+                      >
+                         <motion.div 
+                           animate={{ x: appSettings.highContrast ? 32 : 4 }}
+                           className="w-6 h-6 rounded-full bg-slate-950 absolute top-1 shadow-lg"
+                         />
+                      </button>
+                   </div>
                 </div>
               </div>
             )}

@@ -21,21 +21,48 @@
 
 @layer base {
   :root {
-    --bg: #020617;
-    --bg2: #0f172a;
-    --card: #1e293b;
-    --border: rgba(51, 65, 85, 0.4);
-    --fg: #f8fafc;
-    --muted: #94a3b8;
+    --bg: #000000; /* Pure black for deep contrast */
+    --bg2: #0a0f1d;
+    --card: #111827;
+    --border: rgba(255, 255, 255, 0.2);
+    --fg: #ffffff; /* Pure white */
+    --muted: #cbd5e1; /* Much lighter muted text for dark mode */
   }
 
   :root.light {
     --bg: #ffffff;
-    --bg2: #f8fafc;
+    --bg2: #f1f5f9;
     --card: #ffffff;
-    --border: #e2e8f0;
-    --fg: #020617; /* High contrast dark navy for light mode */
-    --muted: #475569;
+    --border: #bfc9d5; /* Stronger borders */
+    --fg: #000000; /* Pure black */
+    --muted: #334155; /* Darker muted text for light mode */
+  }
+
+  :root.contrast {
+    --bg: #000000;
+    --bg2: #000000;
+    --card: #000000;
+    --border: #ffffff;
+    --fg: #ffffff;
+    --muted: #ffffff;
+    --color-accent: #ffff00; /* Yellow is high contrast */
+    --color-accent2: #ffff00;
+  }
+
+  .contrast * {
+    backdrop-filter: none !important;
+    mask-image: none !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+  }
+
+  .contrast .glass, 
+  .contrast .glass-card,
+  .contrast [class*="bg-bg2/"],
+  .contrast [class*="bg-card/"],
+  .contrast [class*="bg-accent/"] {
+    background-color: var(--bg) !important;
+    opacity: 1 !important;
   }
 
   body {
@@ -74,46 +101,51 @@
     @apply bg-slate-100 text-slate-900 border-slate-200 hover:bg-slate-200;
   }
 
-  /* Form Inputs */
+  /* Form Inputs - Denser and Smart */
   .fi {
-    @apply w-full bg-bg/50 border border-border rounded-xl px-4 py-3 outline-none focus:border-accent/60 focus:ring-4 focus:ring-accent/5 transition-all text-sm font-medium placeholder:text-muted/40;
+    @apply w-full bg-bg/40 border border-border/60 rounded-lg px-3 py-2 outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/5 transition-all text-[13px] font-medium placeholder:text-muted/30;
   }
 
   .light .fi {
-    @apply bg-white border-slate-300 text-slate-900 focus:border-accent focus:ring-accent/10;
+    @apply bg-white border-slate-200 text-slate-800 focus:border-accent focus:ring-accent/5;
   }
 
-  /* Modern Enterprise Table */
+  /* Modern Enterprise Table - Narrow & Clean */
   .et {
-    @apply w-full border-separate border-spacing-0 text-[13px];
+    @apply w-full border-separate border-spacing-0 text-[12px];
   }
 
   .et thead th {
-    @apply bg-slate-900/90 backdrop-blur-md text-accent font-bold p-4 border-b-2 border-accent/20 text-center sticky top-0 z-10 whitespace-nowrap font-display text-[11px] uppercase tracking-[0.2em];
+    @apply bg-slate-950/80 backdrop-blur-md text-muted font-black px-2 py-2 border-b border-border/40 text-center sticky top-0 z-10 whitespace-nowrap font-display text-[9px] uppercase tracking-[0.1em] hover:text-accent transition-colors;
   }
 
   .light .et thead th {
-    @apply bg-slate-100 text-slate-900 border-slate-300;
+    @apply bg-slate-50 text-slate-500 border-slate-200;
   }
 
   .et tbody td {
-    @apply p-4 border-b border-border/40 bg-transparent transition-all text-center font-medium;
+    @apply px-2 py-1.5 border-b border-border/20 bg-transparent transition-all text-center font-medium leading-tight;
   }
 
   .light .et tbody td {
-    @apply border-slate-200 text-slate-800;
+    @apply border-slate-100/50 text-slate-600;
   }
 
   .et tbody tr {
-    @apply transition-all duration-200;
+    @apply transition-all duration-150;
   }
 
   .et tbody tr:hover td {
-    @apply bg-accent/5 text-fg;
+    @apply bg-accent/5 text-fg font-semibold;
   }
 
-  .light .et tbody tr:hover td {
-    @apply bg-slate-50 text-slate-900;
+  /* Header/Section Titles - Narrow & Professional */
+  .st {
+    @apply text-lg font-black uppercase tracking-tighter text-fg flex items-center gap-2;
+  }
+
+  .sst {
+    @apply text-[10px] font-black uppercase tracking-[0.2em] text-muted;
   }
 
   /* Tabs */
@@ -121,22 +153,25 @@
     @apply flex items-center gap-2.5 px-6 py-4 rounded-xl font-bold text-[12px] uppercase transition-all relative overflow-hidden tracking-widest;
   }
 
-  /* Scrollbar */
-  ::-webkit-scrollbar { @apply w-1.5 h-1.5; }
-  ::-webkit-scrollbar-track { @apply bg-transparent; }
-  ::-webkit-scrollbar-thumb { @apply bg-slate-700/50 rounded-full hover:bg-slate-600; }
-  .light ::-webkit-scrollbar-thumb { @apply bg-slate-300 hover:bg-slate-400; }
+  /* Rationalized Scrollbar & Utilities */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Mobile Tap Highlights Control */
+  * { -webkit-tap-highlight-color: transparent; }
+
+  /* Smooth Transitions for Collapsible Sidebar */
+  aside { will-change: width; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+
+  /* Custom Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar { @apply w-1.5 h-1.5; }
+  .custom-scrollbar::-webkit-scrollbar-track { @apply bg-transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors; }
+  .light .custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-300 hover:bg-slate-400; }
 }
 
 .font-display { font-family: "Outfit", sans-serif; }
 .font-mono { font-family: "JetBrains Mono", monospace; }
-
-@media print {
-  .no-print { display: none !important; }
-  body { background: white !important; color: black !important; }
-  .et { border: 1px solid #ddd !important; border-spacing: 0 !important; }
-  .et th, .et td { border: 1px solid #ddd !important; }
-}
 
 @media print {
   @page {
@@ -208,16 +243,4 @@
   .overflow-x-auto {
     overflow: visible !important;
   }
-}
-
-::-webkit-scrollbar {
-  @apply w-1.5 h-1.5;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-bg;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-border rounded-full;
 }

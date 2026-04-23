@@ -38,6 +38,9 @@ import { Order, FinishingTrackingEntry } from '../types';
 import { format, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
+import FlowVisualizer from './FlowVisualizer';
+import StationView from './StationView';
+import FinishingHistoricalImportModal from './FinishingHistoricalImportModal';
 
 interface FinishingTrackerProps {
   orders: Order[];
@@ -49,6 +52,8 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
   const [allEntries, setAllEntries] = useState<FinishingTrackingEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDashboard, setIsDashboard] = useState(true);
+  const [displayLimitLedger, setDisplayLimitLedger] = useState(100);
+  const [displayLimitDashboard, setDisplayLimitDashboard] = useState(50);
   
   // Specific style details entries
   const [currentEntries, setCurrentEntries] = useState<FinishingTrackingEntry[]>([]);
@@ -67,6 +72,8 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<boolean>(false);
   const [entryMode, setEntryMode] = useState<'single' | 'batch'>('single');
+  const [isStationMode, setIsStationMode] = useState(false);
+  const [isHistoricalModalOpen, setIsHistoricalModalOpen] = useState(false);
   const [batchRows, setBatchRows] = useState<any[]>([
     { id: Date.now(), date: format(new Date(), 'yyyy-MM-dd'), color: '', lineNo: '1', input: '', output: '' }
   ]);
@@ -81,6 +88,23 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
 
   const updateBatchRow = (id: number, field: string, value: string) => {
     setBatchRows(batchRows.map(r => r.id === id ? { ...r, [field]: value } : r));
+  };
+
+  const handleHistoricalSave = async (entries: any[]) => {
+    try {
+      const promises = entries.map(entry => 
+        addDoc(collection(db, 'finishing_tracking'), {
+          ...entry,
+          createdAt: new Date().toISOString(),
+          userId: auth.currentUser?.uid || 'anonymous'
+        })
+      );
+      await Promise.all(promises);
+      setIsHistoricalModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save some entries');
+    }
   };
 
   const handleDownload = () => {
@@ -232,16 +256,21 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
     });
   }, [currentEntries, filterDate, filterLine]);
 
+  const displayedLedgerEntries = useMemo(() => {
+    return filteredLedgerEntries.slice(0, displayLimitLedger);
+  }, [filteredLedgerEntries, displayLimitLedger]);
+
   // Aggregates for current selected style (Line breakdown)
   const currentAggregates = useMemo(() => {
     const stats: Record<string, any> = {};
     if (styleSummary) {
       styleSummary.colors.forEach((c: any) => {
         stats[c.color] = {
+          color: c.color,
           orderQty: c.orderQty,
           totalInput: 0,
           totalOutput: 0,
-          lineStats: Object.fromEntries(['1','2','3','4','5','6','7'].map(ln => [ln, { input: 0, output: 0 }]))
+          lineStats: Object.fromEntries(['1','2','3','4','5','6','7','8'].map(ln => [ln, { input: 0, output: 0 }]))
         };
       });
       currentEntries.forEach(e => {
@@ -258,42 +287,47 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
     return stats;
   }, [styleSummary, currentEntries]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const recordQuantity = async (data: { date: string, color: string, lineNo: string, input: number, output: number }) => {
     if (!selectedStyle || !styleSummary || !auth.currentUser) return;
-    const inputVal = parseInt(form.input) || 0;
-    const outputVal = parseInt(form.output) || 0;
-    if (!form.color) return setError('Select Color');
-
-    const currentColorStats = currentAggregates[form.color];
+    
+    const currentColorStats = currentAggregates[data.color];
     if (currentColorStats) {
-      if (currentColorStats.totalInput + inputVal > currentColorStats.orderQty) {
-        return setError(`Style Violation: Input exceeds Style Order Qty for ${form.color}`);
+      if (currentColorStats.totalInput + data.input > currentColorStats.orderQty) {
+        throw new Error(`Style Violation: Input exceeds Style Order Qty for ${data.color}`);
       }
-      const currentLineStats = currentColorStats.lineStats[form.lineNo];
-      if (currentLineStats.output + outputVal > currentLineStats.input + inputVal) {
-        return setError(`Line Violation: Output exceeds Line Input`);
+      const currentLineStats = currentColorStats.lineStats[data.lineNo];
+      if (currentLineStats && (currentLineStats.output + data.output > currentLineStats.input + data.input)) {
+        throw new Error(`Line Violation: Output exceeds Line Input`);
       }
     }
 
+    await addDoc(collection(db, 'finishing_tracking'), {
+      ...data,
+      style: selectedStyle,
+      poNo: 'STYLE-BASE',
+      orderQty: currentColorStats?.orderQty || 0,
+      createdAt: new Date().toISOString(),
+      userId: auth.currentUser.uid
+    });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
     try {
-      await addDoc(collection(db, 'finishing_tracking'), {
+      await recordQuantity({
         date: form.date,
-        style: selectedStyle,
-        poNo: 'STYLE-BASE',
         color: form.color,
         lineNo: form.lineNo,
-        input: inputVal,
-        output: outputVal,
-        orderQty: currentColorStats?.orderQty || 0,
-        createdAt: new Date().toISOString(),
-        userId: auth.currentUser.uid
+        input: parseInt(form.input) || 0,
+        output: parseInt(form.output) || 0
       });
       setForm({ ...form, input: '', output: '' });
-      setError(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err) { setError('Failed to save'); }
+    } catch (err: any) { 
+      setError(err.message || 'Failed to save'); 
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -334,6 +368,14 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
                 >
                    <ClipboardList size={14} /> Style Detail
                 </button>
+                {!isDashboard && (
+                    <button 
+                       onClick={() => setIsStationMode(!isStationMode)}
+                       className={cn("px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ml-2", isStationMode ? "bg-accent/20 text-accent font-black shadow-lg" : "text-muted hover:text-white")}
+                    >
+                       <Activity size={14} /> {isStationMode ? 'Exit Station Mode' : 'Operator Station Mode'}
+                    </button>
+                )}
              </div>
           </div>
 
@@ -351,24 +393,44 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
              <button className="btn btn-p h-14 px-8 box-border flex items-center gap-2" onClick={handleDownload}>
                 <Download size={18} /> Download
              </button>
+             <button className="btn btn-o h-14 px-8 box-border flex items-center gap-2" onClick={() => setIsHistoricalModalOpen(true)}>
+                <HistoryIcon size={18} /> Bulk Import
+             </button>
           </div>
         </div>
       </div>
 
       <AnimatePresence mode="wait">
+        {isHistoricalModalOpen && (
+          <FinishingHistoricalImportModal 
+            onClose={() => setIsHistoricalModalOpen(false)}
+            onSave={handleHistoricalSave}
+            orders={orders}
+          />
+        )}
         {isDashboard ? (
           <motion.div 
             key="dashboard"
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
             className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6"
           >
-            {filteredDashboardStyles.map((style: any) => (
+            {filteredDashboardStyles.slice(0, displayLimitDashboard).map((style: any) => (
               <StyleCard 
                 key={style.style} 
                 data={style} 
                 onOpen={(s) => { setSelectedStyle(s); setIsDashboard(false); }} 
               />
             ))}
+            {filteredDashboardStyles.length > displayLimitDashboard && (
+              <div className="col-span-full py-10 text-center">
+                 <button 
+                   onClick={() => setDisplayLimitDashboard(prev => prev + 50)}
+                   className="px-8 py-3 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-indigo-400 hover:bg-indigo-500 hover:text-white transition-all shadow-xl"
+                 >
+                   Load Next Production Hubs ({filteredDashboardStyles.length - displayLimitDashboard} Remaining)
+                 </button>
+              </div>
+            )}
             {filteredDashboardStyles.length === 0 && (
               <div className="col-span-full py-40 text-center opacity-30 italic font-medium">No styles found in repository.</div>
             )}
@@ -387,175 +449,224 @@ export default function FinishingTracker({ orders }: FinishingTrackerProps) {
                <div className="text-sm font-black uppercase text-indigo-400 tracking-tighter">{selectedStyle}</div>
             </div>
 
-            {/* Entry Form (Top) */}
-            <section className="bg-bg2/80 border border-border rounded-[40px] p-8 shadow-2xl relative overflow-hidden backdrop-blur-3xl">
-              <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
-                 <div className="flex items-center gap-3">
-                    <Plus size={18} className="text-indigo-500" />
-                    <h3 className="text-lg font-black uppercase tracking-tight">Production Entry</h3>
-                 </div>
-                 
-                 <div className="flex bg-bg/50 p-1 rounded-xl w-fit border border-border">
-                    <button 
-                       onClick={() => setEntryMode('single')}
-                       className={cn("px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all", entryMode === 'single' ? "bg-bg shadow text-indigo-400" : "text-muted hover:text-white")}
-                    >
-                       Single Entry
-                    </button>
-                    <button 
-                       onClick={() => setEntryMode('batch')}
-                       className={cn("px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all", entryMode === 'batch' ? "bg-bg shadow text-indigo-400" : "text-muted hover:text-white")}
-                    >
-                       Batch (History) Entry
-                    </button>
-                 </div>
-              </div>
+            <AnimatePresence mode="wait">
+               {isStationMode ? (
+                  <motion.div
+                    key="station"
+                    initial={{ opacity: 0, x: 50 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -50 }}
+                  >
+                     <StationView 
+                        styleName={selectedStyle || ''}
+                        colors={styleSummary?.colors || []}
+                        currentAggregates={currentAggregates}
+                        onSubmit={recordQuantity}
+                     />
+                  </motion.div>
+               ) : (
+                  <motion.div
+                     key="standard"
+                     initial={{ opacity: 0, x: -50 }}
+                     animate={{ opacity: 1, x: 0 }}
+                     exit={{ opacity: 0, x: 50 }}
+                     className="space-y-6"
+                  >
+                     {/* FLOW VISUALIZATION & WIP DIAGNOSTICS */}
+                     {styleSummary && (
+                        <FlowVisualizer 
+                           styleName={selectedStyle || ''}
+                           totalOrder={styleSummary.totalOrderQty}
+                           totalInput={styleSummary.totalInput}
+                           totalOutput={styleSummary.totalOutput}
+                           colors={styleSummary.colors}
+                        />
+                     )}
 
-              {entryMode === 'single' ? (
-                <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 items-end">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">01_DATE</label>
-                    <input type="date" required className="fi py-3 shadow-inner" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">02_COLOR</label>
-                    <select required className="fi py-3" value={form.color} onChange={(e) => setForm({...form, color: e.target.value})}>
-                      <option value="">Color...</option>
-                      {styleSummary?.colors.map((c: any) => <option key={c.color} value={c.color}>{c.color}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">03_LINE</label>
-                    <select required className="fi py-3" value={form.lineNo} onChange={(e) => setForm({...form, lineNo: e.target.value})}>
-                      {['1','2','3','4','5','6','7'].map(n => <option key={n} value={n}>Line {n}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-indigo-400 uppercase tracking-widest pl-1 font-mono">04_IN_QTY</label>
-                    <input type="number" required placeholder="Qty" className="fi py-3 font-black num" value={form.input} onChange={(e) => setForm({...form, input: e.target.value})} />
-                    {form.color && currentAggregates[form.color] && (
-                      <div className="flex justify-between px-1 text-[9px] font-bold text-muted/60 uppercase">
-                         <span>Order: <span className="text-white">{currentAggregates[form.color].orderQty.toLocaleString()}</span></span>
-                         <span>Ach: <span className="text-indigo-400">{currentAggregates[form.color].totalInput.toLocaleString()}</span></span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-success uppercase tracking-widest pl-1 font-mono">05_OUT_QTY</label>
-                    <input type="number" required placeholder="Qty" className="fi py-3 font-black num" value={form.output} onChange={(e) => setForm({...form, output: e.target.value})} />
-                    {form.color && currentAggregates[form.color] && (
-                      <div className="flex justify-between px-1 text-[9px] font-bold text-muted/60 uppercase">
-                         <span>In: <span className="text-indigo-400">{currentAggregates[form.color].totalInput.toLocaleString()}</span></span>
-                         <span>Ach: <span className="text-success">{currentAggregates[form.color].totalOutput.toLocaleString()}</span></span>
-                      </div>
-                    )}
-                  </div>
-                  <button type="submit" className={cn("btn btn-p w-full py-3.5 text-[10px] font-black tracking-[0.2em] shadow-xl transition-all", success && "bg-success")}>
-                    {success ? 'SUCCESS' : 'SAVE RECORD'}
-                  </button>
-                </form>
-              ) : (
-                <div className="space-y-4">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="text-[9px] font-black text-muted uppercase tracking-widest">
-                          <th className="px-3 py-2">Date</th>
-                          <th className="px-3 py-2">Color</th>
-                          <th className="px-3 py-2">Line</th>
-                          <th className="px-3 py-2">Input</th>
-                          <th className="px-3 py-2">Output</th>
-                          <th className="px-3 py-2"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="space-y-2">
-                        {batchRows.map((row) => (
-                          <tr key={row.id}>
-                            <td className="px-1 py-1"><input type="date" className="fi text-[10px] py-2" value={row.date} onChange={(e) => updateBatchRow(row.id, 'date', e.target.value)} /></td>
-                            <td className="px-1 py-1">
-                               <select className="fi text-[10px] py-2" value={row.color} onChange={(e) => updateBatchRow(row.id, 'color', e.target.value)}>
-                                  <option value="">Color...</option>
-                                  {styleSummary?.colors.map((c: any) => <option key={c.color} value={c.color}>{c.color}</option>)}
-                               </select>
-                            </td>
-                            <td className="px-1 py-1">
-                               <select className="fi text-[10px] py-2" value={row.lineNo} onChange={(e) => updateBatchRow(row.id, 'lineNo', e.target.value)}>
-                                  {['1','2','3','4','5','6','7'].map(n => <option key={n} value={n}>Line {n}</option>)}
-                               </select>
-                            </td>
-                            <td className="px-1 py-1"><input type="number" placeholder="Input" className="fi text-[10px] py-2 num" value={row.input} onChange={(e) => updateBatchRow(row.id, 'input', e.target.value)} /></td>
-                            <td className="px-1 py-1"><input type="number" placeholder="Output" className="fi text-[10px] py-2 num" value={row.output} onChange={(e) => updateBatchRow(row.id, 'output', e.target.value)} /></td>
-                            <td className="px-1 py-1">
-                               <button onClick={() => removeBatchRow(row.id)} className="p-2 text-muted hover:text-danger"><Trash2 size={14}/></button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex items-center justify-between mt-4">
-                     <button onClick={addBatchRow} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2 hover:underline">
-                        <Plus size={14} /> Add Another Row
-                     </button>
-                     <button onClick={handleBatchSubmit} disabled={isLoading} className={cn("btn btn-p px-10 py-3 text-[10px] font-black tracking-widest shadow-xl", success && "bg-success")}>
-                        {isLoading ? 'SAVING...' : success ? 'BATCH SAVED' : 'SAVE ALL RECORDS'}
-                     </button>
-                  </div>
-                </div>
-              )}
-              {error && <div className="mt-4 p-3 bg-danger/10 text-danger text-[10px] font-black rounded-xl uppercase tracking-tighter border border-danger/20 flex gap-2 items-center"><AlertCircle size={14}/> {error}</div>}
-            </section>
+                     {/* Entry Form (Top) */}
+                     <section className="bg-bg2/80 border border-border rounded-[40px] p-8 shadow-2xl relative overflow-hidden backdrop-blur-3xl">
+                       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+                          <div className="flex items-center gap-3">
+                             <Plus size={18} className="text-indigo-500" />
+                             <h3 className="text-lg font-black uppercase tracking-tight">Production Entry</h3>
+                          </div>
+                          
+                          <div className="flex bg-bg/50 p-1 rounded-xl w-fit border border-border">
+                             <button 
+                                onClick={() => setEntryMode('single')}
+                                className={cn("px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all", entryMode === 'single' ? "bg-bg shadow text-indigo-400" : "text-muted hover:text-white")}
+                             >
+                                Single Entry
+                             </button>
+                             <button 
+                                onClick={() => setEntryMode('batch')}
+                                className={cn("px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-2 transition-all", entryMode === 'batch' ? "bg-bg shadow text-indigo-400" : "text-muted hover:text-white")}
+                             >
+                                Batch (History) Entry
+                             </button>
+                          </div>
+                       </div>
 
-            {/* Ledger Table */}
-            <div className="bg-bg2/40 border border-border rounded-[40px] overflow-hidden shadow-2xl backdrop-blur-3xl min-h-[500px] flex flex-col">
-               <div className="p-6 border-b border-border bg-bg/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <h3 className="font-black uppercase tracking-widest text-sm flex items-center gap-2"><HistoryIcon size={18} className="text-muted" /> Production Ledger</h3>
-                  <div className="flex items-center gap-2">
-                    <input type="date" className="fi py-1 px-3 text-[10px] w-auto inline-block border-border/50" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
-                    <select className="fi py-1 px-3 text-[10px] w-auto inline-block border-border/50" value={filterLine} onChange={(e) => setFilterLine(e.target.value)}>
-                       <option value="">Line...</option>
-                       {['1','2','3','4','5','6','7'].map(n => <option key={n} value={n}>L-{n}</option>)}
-                    </select>
-                    {(filterDate || filterLine) && <button onClick={() => {setFilterDate(''); setFilterLine('');}} className="p-1 px-2 text-[10px] text-danger font-black">X</button>}
-                  </div>
-               </div>
-               <div className="overflow-x-auto flex-1">
-                  <table className="w-full text-left">
-                    <thead className="bg-bg text-[9px] font-black text-muted uppercase tracking-[0.2em] border-b border-border">
-                      <tr>
-                        <th className="px-6 py-4 text-center">Date</th>
-                        <th className="px-6 py-4">Color</th>
-                        <th className="px-6 py-4 text-center">Line</th>
-                        <th className="px-6 py-4 text-center">Input</th>
-                        <th className="px-6 py-4 text-center">Output</th>
-                        <th className="px-6 py-4 text-center">WIP</th>
-                        <th className="px-6 py-4 text-right">Delete</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/30">
-                      {filteredLedgerEntries.map(e => (
-                        <tr key={e.id} className="hover:bg-indigo-500/[0.03] transition-colors group">
-                           <td className="px-6 py-4 text-center">
-                              <div className="flex flex-col">
-                                <span className="text-[10px] font-black num leading-none">{format(parseISO(e.date), 'dd')}</span>
-                                <span className="text-[8px] font-black text-muted uppercase tracking-tighter mt-1">{format(parseISO(e.date), 'MMM').toUpperCase()}</span>
-                              </div>
-                           </td>
-                           <td className="px-6 py-4 font-black text-[11px] uppercase text-white/80">{e.color}</td>
-                           <td className="px-6 py-4 text-center"><span className="p-1 px-2 bg-bg border border-border rounded-lg text-[10px] font-black text-indigo-400">L-{e.lineNo}</span></td>
-                           <td className="px-6 py-4 text-center font-black num text-sm">{e.input.toLocaleString()}</td>
-                           <td className="px-6 py-4 text-center font-black num text-sm text-success">{e.output.toLocaleString()}</td>
-                           <td className="px-6 py-4 text-center font-black num text-sm text-accent">{(e.input - e.output).toLocaleString()}</td>
-                           <td className="px-6 py-4 text-right"><button onClick={() => handleDelete(e.id)} className="p-2 text-muted hover:text-danger opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {filteredLedgerEntries.length === 0 && <div className="py-20 text-center opacity-30 text-xs italic font-medium">No results for this query.</div>}
-               </div>
-            </div>
-          </motion.div>
-        )}
+                       {entryMode === 'single' ? (
+                         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 items-end">
+                           <div className="space-y-2">
+                             <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">01_DATE</label>
+                             <input type="date" required className="fi py-3 shadow-inner" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+                           </div>
+                           <div className="space-y-2">
+                             <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">02_COLOR</label>
+                             <select required className="fi py-3" value={form.color} onChange={(e) => setForm({...form, color: e.target.value})}>
+                               <option value="">Color...</option>
+                               {styleSummary?.colors.map((c: any) => <option key={c.color} value={c.color}>{c.color}</option>)}
+                             </select>
+                           </div>
+                           <div className="space-y-2">
+                             <label className="text-[10px] font-black text-muted uppercase tracking-widest pl-1 font-mono">03_LINE</label>
+                             <select required className="fi py-3" value={form.lineNo} onChange={(e) => setForm({...form, lineNo: e.target.value})}>
+                               {['1','2','3','4','5','6','7','8'].map(n => <option key={n} value={n}>Line {n}</option>)}
+                             </select>
+                           </div>
+                           <div className="space-y-2">
+                             <label className="text-[10px] font-black text-indigo-400 uppercase tracking-widest pl-1 font-mono">04_IN_QTY</label>
+                             <input type="number" required placeholder="Qty" className="fi py-3 font-black num" value={form.input} onChange={(e) => setForm({...form, input: e.target.value})} />
+                             {form.color && currentAggregates[form.color] && (
+                               <div className="flex justify-between px-1 text-[9px] font-bold text-muted/60 uppercase">
+                                  <span>Order: <span className="text-white">{currentAggregates[form.color].orderQty.toLocaleString()}</span></span>
+                                  <span>Ach: <span className="text-indigo-400">{currentAggregates[form.color].totalInput.toLocaleString()}</span></span>
+                               </div>
+                             )}
+                           </div>
+                           <div className="space-y-2">
+                             <label className="text-[10px] font-black text-success uppercase tracking-widest pl-1 font-mono">05_OUT_QTY</label>
+                             <input type="number" required placeholder="Qty" className="fi py-3 font-black num" value={form.output} onChange={(e) => setForm({...form, output: e.target.value})} />
+                             {form.color && currentAggregates[form.color] && (
+                               <div className="flex justify-between px-1 text-[9px] font-bold text-muted/60 uppercase">
+                                  <span>In: <span className="text-indigo-400">{currentAggregates[form.color].totalInput.toLocaleString()}</span></span>
+                                  <span>Ach: <span className="text-success">{currentAggregates[form.color].totalOutput.toLocaleString()}</span></span>
+                               </div>
+                             )}
+                           </div>
+                           <button type="submit" className={cn("btn btn-p w-full py-3.5 text-[10px] font-black tracking-[0.2em] shadow-xl transition-all", success && "bg-success")}>
+                             {success ? 'SUCCESS' : 'SAVE RECORD'}
+                           </button>
+                         </form>
+                       ) : (
+                         <div className="space-y-4">
+                           <div className="overflow-x-auto">
+                             <table className="w-full text-left">
+                               <thead>
+                                 <tr className="text-[9px] font-black text-muted uppercase tracking-widest">
+                                   <th className="px-3 py-2">Date</th>
+                                   <th className="px-3 py-2">Color</th>
+                                   <th className="px-3 py-2">Line</th>
+                                   <th className="px-3 py-2">Input</th>
+                                   <th className="px-3 py-2">Output</th>
+                                   <th className="px-3 py-2"></th>
+                                 </tr>
+                               </thead>
+                               <tbody className="space-y-2">
+                                 {batchRows.map((row) => (
+                                   <tr key={row.id}>
+                                     <td className="px-1 py-1"><input type="date" className="fi text-[10px] py-2" value={row.date} onChange={(e) => updateBatchRow(row.id, 'date', e.target.value)} /></td>
+                                     <td className="px-1 py-1">
+                                        <select className="fi text-[10px] py-2" value={row.color} onChange={(e) => updateBatchRow(row.id, 'color', e.target.value)}>
+                                           <option value="">Color...</option>
+                                           {styleSummary?.colors.map((c: any) => <option key={c.color} value={c.color}>{c.color}</option>)}
+                                        </select>
+                                     </td>
+                                     <td className="px-1 py-1">
+                                        <select className="fi text-[10px] py-2" value={row.lineNo} onChange={(e) => updateBatchRow(row.id, 'lineNo', e.target.value)}>
+                                           {['1','2','3','4','5','6','7','8'].map(n => <option key={n} value={n}>Line {n}</option>)}
+                                        </select>
+                                     </td>
+                                     <td className="px-1 py-1"><input type="number" placeholder="Input" className="fi text-[10px] py-2 num" value={row.input} onChange={(e) => updateBatchRow(row.id, 'input', e.target.value)} /></td>
+                                     <td className="px-1 py-1"><input type="number" placeholder="Output" className="fi text-[10px] py-2 num" value={row.output} onChange={(e) => updateBatchRow(row.id, 'output', e.target.value)} /></td>
+                                     <td className="px-1 py-1">
+                                        <button onClick={() => removeBatchRow(row.id)} className="p-2 text-muted hover:text-danger"><Trash2 size={14}/></button>
+                                     </td>
+                                   </tr>
+                                 ))}
+                               </tbody>
+                             </table>
+                           </div>
+                           <div className="flex items-center justify-between mt-4">
+                              <button onClick={addBatchRow} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2 hover:underline">
+                                 <Plus size={14} /> Add Another Row
+                              </button>
+                              <button onClick={handleBatchSubmit} disabled={isLoading} className={cn("btn btn-p px-10 py-3 text-[10px] font-black tracking-widest shadow-xl", success && "bg-success")}>
+                                 {isLoading ? 'SAVING...' : success ? 'BATCH SAVED' : 'SAVE ALL RECORDS'}
+                              </button>
+                           </div>
+                         </div>
+                       )}
+                       {error && <div className="mt-4 p-3 bg-danger/10 text-danger text-[10px] font-black rounded-xl uppercase tracking-tighter border border-danger/20 flex gap-2 items-center"><AlertCircle size={14}/> {error}</div>}
+                     </section>
+
+                     {/* Ledger Table */}
+                     <div className="bg-bg2/40 border border-border rounded-[40px] overflow-hidden shadow-2xl backdrop-blur-3xl min-h-[500px] flex flex-col">
+                        <div className="p-6 border-b border-border bg-bg/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                           <h3 className="font-black uppercase tracking-widest text-sm flex items-center gap-2"><HistoryIcon size={18} className="text-muted" /> Production Ledger</h3>
+                           <div className="flex items-center gap-2">
+                             <input type="date" className="fi py-1 px-3 text-[10px] w-auto inline-block border-border/50" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+                             <select className="fi py-1 px-3 text-[10px] w-auto inline-block border-border/50" value={filterLine} onChange={(e) => setFilterLine(e.target.value)}>
+                                <option value="">Line...</option>
+                                {['1','2','3','4','5','6','7','8'].map(n => <option key={n} value={n}>L-{n}</option>)}
+                             </select>
+                             {(filterDate || filterLine) && <button onClick={() => {setFilterDate(''); setFilterLine('');}} className="p-1 px-2 text-[10px] text-danger font-black">X</button>}
+                           </div>
+                        </div>
+                        <div className="overflow-x-auto flex-1">
+                           <table className="w-full text-left">
+                             <thead className="bg-bg text-[9px] font-black text-muted uppercase tracking-[0.2em] border-b border-border">
+                               <tr>
+                                 <th className="px-6 py-4 text-center">Date</th>
+                                 <th className="px-6 py-4">Color</th>
+                                 <th className="px-6 py-4 text-center">Line</th>
+                                 <th className="px-6 py-4 text-center">Input</th>
+                                 <th className="px-6 py-4 text-center">Output</th>
+                                 <th className="px-6 py-4 text-center">WIP</th>
+                                 <th className="px-6 py-4 text-right">Delete</th>
+                               </tr>
+                             </thead>
+                             <tbody className="divide-y divide-border/30">
+                               {displayedLedgerEntries.map(e => (
+                                 <tr key={e.id} className="hover:bg-indigo-500/[0.03] transition-colors group">
+                                    <td className="px-6 py-4 text-center">
+                                       <div className="flex flex-col">
+                                         <span className="text-[10px] font-black num leading-none">{format(parseISO(e.date), 'dd')}</span>
+                                         <span className="text-[8px] font-black text-muted uppercase tracking-tighter mt-1">{format(parseISO(e.date), 'MMM').toUpperCase()}</span>
+                                       </div>
+                                    </td>
+                                    <td className="px-6 py-4 font-black text-[11px] uppercase text-white/80">{e.color}</td>
+                                    <td className="px-6 py-4 text-center"><span className="p-1 px-2 bg-bg border border-border rounded-lg text-[10px] font-black text-indigo-400">L-{e.lineNo}</span></td>
+                                    <td className="px-6 py-4 text-center font-black num text-sm">{e.input.toLocaleString()}</td>
+                                    <td className="px-6 py-4 text-center font-black num text-sm text-success">{e.output.toLocaleString()}</td>
+                                    <td className="px-6 py-4 text-center font-black num text-sm text-accent">{(e.input - e.output).toLocaleString()}</td>
+                                    <td className="px-6 py-4 text-right"><button onClick={() => handleDelete(e.id)} className="p-2 text-muted hover:text-danger opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button></td>
+                                 </tr>
+                               ))}
+                               {filteredLedgerEntries.length > displayLimitLedger && (
+                                 <tr>
+                                   <td colSpan={7} className="p-8 text-center bg-bg/20">
+                                      <button 
+                                         onClick={() => setDisplayLimitLedger(prev => prev + 200)}
+                                         className="px-10 py-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-400 hover:bg-indigo-500 hover:text-white transition-all shadow-xl"
+                                      >
+                                         Load Remaining Ledger Entries ({filteredLedgerEntries.length - displayLimitLedger} Pending)
+                                      </button>
+                                   </td>
+                                 </tr>
+                               )}
+                             </tbody>
+                           </table>
+                           {filteredLedgerEntries.length === 0 && <div className="py-20 text-center opacity-30 text-xs italic font-medium">No results for this query.</div>}
+                        </div>
+                     </div>
+                  </motion.div>
+               )}
+            </AnimatePresence>
+         </motion.div>
+      )}
       </AnimatePresence>
     </div>
   );
@@ -611,6 +722,20 @@ function StyleCard({ data, onOpen }: StyleCardProps) {
          <div className="h-1.5 bg-bg rounded-full overflow-hidden">
             <div className="h-full bg-indigo-500 transition-all duration-1000" style={{ width: `${Math.min(data.progress, 100)}%` }} />
          </div>
+      </div>
+
+      {/* DASHBOARD WIP INSIGHT */}
+      <div className="mb-6 p-4 bg-bg rounded-2xl border border-border/50">
+         <div className="flex items-center gap-2 mb-2">
+            <Activity size={12} className={cn(data.wip > 100 ? "text-accent" : "text-success")} />
+            <span className="text-[9px] font-black uppercase tracking-widest text-white/60">Flow Insight</span>
+         </div>
+         <p className="text-[10px] font-medium text-muted-foreground leading-snug">
+            {data.wip > 0 
+               ? `Currently, ${data.wip.toLocaleString()} pieces are processed in finishing but not yet cleared. ${data.totalOutput.toLocaleString()} pieces have been finalized.`
+               : `No pending WIP. All received ${data.totalInput.toLocaleString()} pieces are fully completed and finalized.`
+            }
+         </p>
       </div>
 
       {/* Color Dropdown Toggle */}

@@ -84,7 +84,7 @@ export default function AboutSection() {
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent/20 border border-accent/20">
               <Zap size={20} className="text-accent" />
             </div>
-            <span className="text-xs font-black uppercase tracking-[0.5em] text-accent">Production Intelligence v2.5</span>
+            <span className="text-xs font-black uppercase tracking-[0.5em] text-accent">Production Intelligence v5.5</span>
           </motion.div>
           
           <motion.h2 
@@ -277,7 +277,7 @@ export default function AboutSection() {
           ALPHA CLOTHING LTD. PRO-TECH SERIES
         </p>
         <p className="mt-2 text-[9px] font-bold text-muted/40 uppercase">
-          Build v2.5.42 — SAVAR, DHAKA PREMISES
+          Build v5.5.42 — SAVAR, DHAKA PREMISES
         </p>
       </div>
     </div>

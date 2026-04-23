@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Scissors, 
   RotateCcw, 
@@ -13,6 +13,8 @@ import {
   Activity,
   Plus,
   ArrowRightLeft,
+  ArrowRight,
+  ArrowUp,
   Trash2,
   Pencil,
   Filter,
@@ -24,9 +26,16 @@ import {
   InfoIcon,
   AlertTriangle,
   Shirt,
+  CalendarDays,
+  Truck,
+  PieChart,
+  Waves,
+  FolderOpen,
+  Library,
   Box as BoxIcon,
   Target,
   Shield,
+  ShieldCheck,
   ClipboardList,
   Save,
   Eraser,
@@ -34,9 +43,11 @@ import {
   Sun,
   Moon,
   Download,
+  ChevronRight,
   Sparkles,
   FileSpreadsheet,
-  Settings2
+  Settings2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, parseISO, isWithinInterval, startOfDay, endOfDay, differenceInCalendarDays } from 'date-fns';
@@ -45,7 +56,7 @@ import { Order, ProductionEntry, POInfo } from './types';
 import { DEFAULT_ORDERS, DEFAULT_ENTRIES, BUYERS } from './constants';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
-import { collection, onSnapshot, query, orderBy, doc, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, getDoc, setDoc } from 'firebase/firestore';
 
 // --- Components (Lazy Loaded) ---
 const OrderMaster = React.lazy(() => import('./components/OrderMaster'));
@@ -54,45 +65,79 @@ const DPRReport = React.lazy(() => import('./components/DPRReport'));
 const WIPReport = React.lazy(() => import('./components/WIPReport'));
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const StatusReport = React.lazy(() => import('./components/OrderStatus'));
-const SettingsModule = React.lazy(() => import('./components/SettingsModule'));
+import SettingsModule from './components/SettingsModule';
 const SystemHealth = React.lazy(() => import('./components/SystemHealth'));
 const FinishingTracker = React.lazy(() => import('./components/FinishingTracker'));
+const ShipmentSchedule = React.lazy(() => import('./components/ShipmentSchedule'));
 const ReportBuilder = React.lazy(() => import('./components/ReportBuilder'));
 const AboutSection = React.lazy(() => import('./components/AboutSection'));
+const ExcelLibrary = React.lazy(() => import('./components/ExcelLibrary'));
 import Login from './components/Login';
+
+// --- Helper Components ---
+const DigitalClock = () => {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="flex flex-col items-end">
+       <span className="text-[11px] font-black text-fg leading-none font-mono">
+         {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+       </span>
+       <span className="text-[8px] font-black text-muted uppercase tracking-[0.1em] mt-1">
+         {time.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
+       </span>
+    </div>
+  );
+};
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<{ role: string; permissions?: string[]; status?: string } | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [entries, setEntries] = useState<ProductionEntry[]>([]);
+
+  // --- Dynamic Hierarchical Sorting (Buyer > Style > PO > Color) ---
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort((a, b) => {
+      const buyerCmp = (a.buyer || '').localeCompare(b.buyer || '');
+      if (buyerCmp !== 0) return buyerCmp;
+      const styleCmp = (a.style || '').localeCompare(b.style || '');
+      if (styleCmp !== 0) return styleCmp;
+      const poCmp = (a.poNo || '').localeCompare(b.poNo || '');
+      if (poCmp !== 0) return poCmp;
+      return (a.color || '').localeCompare(b.color || '');
+    });
+  }, [orders]);
+
   const [activeTab, setActiveTab] = useState('dash');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   const [appSettings, setAppSettings] = useState({
     primaryColor: '#f59e0b',
     fontSize: 'md',
     fontFamily: 'Inter, ui-sans-serif, system-ui',
     navPosition: 'top',
-    compactMode: false
+    compactMode: false,
+    highContrast: false
   });
   const [toasts, setToasts] = useState<{ id: number; msg: string; type: 'ok' | 'er' | 'in' }[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
+  const [isExporting, setIsExporting] = useState(false);
   const [isDownloadOpen, setIsDownloadOpen] = useState(false);
-  const [time, setTime] = useState(new Date());
+  const reportBuilderRef = useRef<any>(null);
 
-  useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  
-  // --- Memoized PO Lookup Map ---
   const poLookupMap = useMemo(() => {
     const map = new Map<string, POInfo>();
     const poGroups: Record<string, Order[]> = {};
     
-    orders.forEach(o => {
+    sortedOrders.forEach(o => {
       if (!poGroups[o.poNo]) poGroups[o.poNo] = [];
       poGroups[o.poNo].push(o);
     });
@@ -110,11 +155,36 @@ export default function App() {
     });
     
     return map;
-  }, [orders]);
+  }, [sortedOrders]);
 
-  const getPOInfo = (poNo: string): POInfo | null => {
+  const sortedEntries = useMemo(() => {
+    return [...entries].sort((a, b) => {
+      const infoA = poLookupMap.get(a.poNo);
+      const infoB = poLookupMap.get(b.poNo);
+      
+      const buyerA = infoA?.buyer || '';
+      const buyerB = infoB?.buyer || '';
+      const buyerCmp = buyerA.localeCompare(buyerB);
+      if (buyerCmp !== 0) return buyerCmp;
+      
+      const styleA = infoA?.style || '';
+      const styleB = infoB?.style || '';
+      const styleCmp = styleA.localeCompare(styleB);
+      if (styleCmp !== 0) return styleCmp;
+      
+      const poCmp = (a.poNo || '').localeCompare(b.poNo || '');
+      if (poCmp !== 0) return poCmp;
+      
+      const colorCmp = (a.color || '').localeCompare(b.color || '');
+      if (colorCmp !== 0) return colorCmp;
+      
+      return (b.date || '').localeCompare(a.date || ''); // Fallback to Date Desc
+    });
+  }, [entries, poLookupMap]);
+
+  const getPOInfo = useCallback((poNo: string): POInfo | null => {
     return poLookupMap.get(poNo) || null;
-  };
+  }, [poLookupMap]);
 
   // --- Memoized Aggregates for Performance ---
   const aggregates = useMemo(() => {
@@ -157,7 +227,7 @@ export default function App() {
           const data = userDoc.data() as { role: string; permissions?: string[]; status?: string };
           if (data.status === 'suspended') {
             await signOut(auth);
-            addToast('Your account has been suspended. Please contact admin.', 'er');
+            addToast('Account Suspended', 'er');
             setUserProfile(null);
             setUser(null);
           } else {
@@ -172,22 +242,48 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- Initialization ---
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // --- Persistence: Load App Settings from Firestore ---
   useEffect(() => {
-    const savedSettings = localStorage.getItem('acl_settings');
-    if (savedSettings) {
-      const parsed = JSON.parse(savedSettings);
-      setAppSettings(parsed);
-      // Apply saved settings
-      document.documentElement.style.setProperty('--color-accent', parsed.primaryColor);
-      document.documentElement.style.setProperty('--font-sans', parsed.fontFamily);
-      document.documentElement.style.fontSize = parsed.fontSize === 'sm' ? '14px' : parsed.fontSize === 'lg' ? '18px' : '16px';
-    }
+    const loadSettings = async () => {
+      try {
+        const settingsRef = doc(db, 'settings', 'global');
+        const settingsSnap = await getDoc(settingsRef);
+        if (settingsSnap.exists()) {
+          const parsed = settingsSnap.data();
+          setAppSettings(prev => ({ ...prev, ...parsed }));
+          
+          // Apply settings to DOM
+          if (parsed.primaryColor) document.documentElement.style.setProperty('--color-accent', parsed.primaryColor);
+          if (parsed.fontFamily) document.documentElement.style.setProperty('--font-sans', parsed.fontFamily);
+          if (parsed.fontSize) {
+            document.documentElement.style.fontSize = parsed.fontSize === 'sm' ? '14px' : parsed.fontSize === 'lg' ? '18px' : '16px';
+          }
+          if (parsed.highContrast !== undefined) {
+             if (parsed.highContrast) document.documentElement.classList.add('contrast');
+             else document.documentElement.classList.remove('contrast');
+          }
+        }
+      } catch (err) {
+        console.error("Error loading app settings:", err);
+      }
+    };
+    loadSettings();
   }, []);
 
-  const updateAppSettings = (newSettings: any) => {
+  const updateAppSettings = async (newSettings: any) => {
     setAppSettings(newSettings);
-    localStorage.setItem('acl_settings', JSON.stringify(newSettings));
+    // Persist to Firestore
+    try {
+      const { updatedAt, ...settingsToSave } = newSettings;
+      await setDoc(doc(db, 'settings', 'global'), {
+        ...settingsToSave,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.error("Error persisting settings:", err);
+    }
   };
 
   // --- Firestore Listeners ---
@@ -235,14 +331,14 @@ export default function App() {
   };
 
   // --- Helpers ---
-  const addToast = (msg: string, type: 'ok' | 'er' | 'in' = 'ok') => {
+  const addToast = useCallback((msg: string, type: 'ok' | 'er' | 'in' = 'ok') => {
     const id = Date.now() + toastCounter.current;
     toastCounter.current += 1;
     setToasts(prev => [...prev, { id, msg, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3000);
-  };
+  }, []);
 
   const resetAll = () => {
     if (window.confirm('Reset all data to sample data?')) {
@@ -253,231 +349,198 @@ export default function App() {
   };
 
   const downloadPDF = async () => {
-    if (!contentRef.current) return;
-    
-    addToast('Generating Professional PDF...', 'in');
+    if (activeTab === 'custom-report' && reportBuilderRef.current) {
+      await reportBuilderRef.current.exportToPDF();
+      return;
+    }
+
+    setIsExporting(true);
+    addToast('Preparing Vector Engine...', 'in');
     
     try {
-      const html2canvasMod = await import('html2canvas');
-      const html2canvas = (html2canvasMod.default || html2canvasMod) as any;
       const jspdfMod = await import('jspdf');
       const jsPDFConstructor = (jspdfMod.jsPDF || (jspdfMod as any).default || jspdfMod) as any;
+      const { default: autoTable } = await import('jspdf-autotable');
+
+      const orientation = activeTab === 'master' || activeTab === 'entry' || activeTab === 'wip' || activeTab === 'dpr' || activeTab === 'status' ? 'l' : 'p';
+      const doc = new jsPDFConstructor(orientation, 'mm', 'a4');
+      const pageWidth = doc.internal.pageSize.getWidth();
       
-      const element = contentRef.current;
       const reportDate = format(new Date(), 'dd-MMM-yy');
       const reportTime = format(new Date(), 'hh:mm:ss a');
+      const userEmail = user?.email?.toUpperCase() || 'SYSTEM';
+
+      // 1. Branding Header (Professional White Theme)
+      // Clean white background
+      doc.setFillColor(255, 255, 255);
+      doc.rect(0, 0, pageWidth, 40, 'F');
       
-      // Determine orientation based on report type
-      const isWideReport = activeTab === 'wip' || activeTab === 'dpr' || activeTab === 'status';
-      const orientation = isWideReport ? 'l' : 'p';
-      const captureWidth = isWideReport ? 1600 : 1100;
-
-      // Create a temporary container for the clone
-      const container = document.createElement('div');
-      container.style.position = 'fixed';
-      container.style.left = '-9999px';
-      container.style.top = '0';
-      container.style.width = `${captureWidth}px`; 
-      container.style.backgroundColor = '#ffffff';
-      document.body.appendChild(container);
+      // Accent Stripe (Theme Yellow)
+      doc.setFillColor(245, 158, 11);
+      doc.rect(10, 32, pageWidth - 20, 1.5, 'F');
       
-      const reportWrapper = document.createElement('div');
-      reportWrapper.style.padding = '30px';
-      reportWrapper.style.backgroundColor = '#ffffff';
-      container.appendChild(reportWrapper);
-
-      // Professional Header
-      const header = document.createElement('div');
-      header.style.background = '#f8fafc';
-      header.style.borderBottom = '3px solid #f59e0b';
-      header.style.marginBottom = '25px';
-      header.style.padding = '25px';
-      header.style.borderRadius = '12px';
-      header.style.textAlign = 'center';
-      header.style.fontFamily = 'Arial, sans-serif';
-      header.style.position = 'relative';
-      header.style.display = 'flex';
-      header.style.alignItems = 'center';
-      header.style.justifyContent = 'space-between';
-      header.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 20px;">
-          <img src="/logo-2.png" 
-               style="width: 80px; height: 80px; object-fit: contain; border-radius: 12px; background: #020617; padding: 5px; border: 2px solid #f59e0b;" 
-               referrerPolicy="no-referrer"
-               onError="this.src='/logo.png'" />
-          <div style="text-align: left;">
-            <h1 style="font-size: 28px; font-weight: 900; margin: 0; color: #0f172a; letter-spacing: -0.5px;">ALPHA CLOTHING LTD.</h1>
-            <p style="font-size: 11px; font-weight: 800; margin: 2px 0; color: #f59e0b; text-transform: uppercase; letter-spacing: 2px;">The Best Look Anytime Anywhere</p>
-            <p style="font-size: 10px; font-weight: bold; margin: 0; color: #64748b;">Tenguri, BKSP, Ashulia, Savar, Dhaka</p>
-          </div>
-        </div>
-        <div style="text-align: right;">
-          <h2 style="font-size: 18px; font-weight: 900; margin: 0; color: #020617; text-transform: uppercase; letter-spacing: 1px;">${activeTab.replace('-', ' ').toUpperCase()} REPORT</h2>
-          <div style="margin-top: 8px; font-size: 9px; color: #64748b; font-weight: bold;">
-            <div style="color: #020617;">PREPARED BY: ${user?.email?.toUpperCase() || 'SYSTEM'}</div>
-            <div>DATE: ${reportDate} | TIME: ${reportTime}</div>
-          </div>
-        </div>
-      `;
-      reportWrapper.appendChild(header);
-
-      const clone = element.cloneNode(true) as HTMLElement;
-      reportWrapper.appendChild(clone);
+      // Branding text
+      doc.setTextColor(15, 23, 42); // slate-900 (Black)
+      doc.setFontSize(26);
+      doc.setFont("helvetica", "bold");
+      doc.text("ALPHA CLOTHING LTD.", 15, 18);
       
-      // Clean up clone for printing
-      const allElements = clone.querySelectorAll('*');
-      allElements.forEach((el: any) => {
-        el.style.backgroundColor = 'transparent';
-        el.style.color = '#020617';
-        el.style.borderColor = '#e2e8f0';
-        el.style.boxShadow = 'none';
-        
-        if (el.tagName === 'BUTTON' || el.classList.contains('no-print') || el.classList.contains('btn') || el.tagName === 'NAV') {
-          el.style.display = 'none';
-        }
-        
-        if (el.tagName === 'TABLE') {
-          el.style.width = '100%';
-          el.style.borderCollapse = 'separate';
-          el.style.borderSpacing = '0';
-          el.style.marginTop = '10px';
-          el.style.borderRadius = '8px';
-          el.style.overflow = 'hidden';
-          el.style.border = '1px solid #e2e8f0';
-        }
-        
-        if (el.tagName === 'TH') {
-          el.style.backgroundColor = '#f1f5f9';
-          el.style.color = '#020617';
-          el.style.borderBottom = '2px solid #f59e0b';
-          el.style.padding = '12px 8px';
-          el.style.fontSize = '10px';
-          el.style.fontWeight = '900';
-          el.style.textTransform = 'uppercase';
-        }
-        
-        if (el.tagName === 'TD') {
-          el.style.borderBottom = '1px solid #f1f5f9';
-          el.style.padding = '10px 8px';
-          el.style.fontSize = '10px';
-          el.style.fontWeight = '500';
-        }
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text("The Best Look Anytime Anywhere", 15, 24);
+      doc.text("Tenguri, BKSP, Ashulia, Savar, Dhaka", 15, 28);
 
-        if (el.classList.contains('overflow-x-auto') || el.classList.contains('max-h-[60vh]')) {
-          el.style.maxHeight = 'none';
-          el.style.overflow = 'visible';
-        }
-      });
-
-      // Capture Header
-      const headerCanvas = await html2canvas(header, { 
-        scale: 2, 
-        backgroundColor: '#fff',
-        onclone: (clonedDoc) => {
-          const elements = clonedDoc.getElementsByTagName('*');
-          for (let i = 0; i < elements.length; i++) {
-            const el = elements[i] as HTMLElement;
-            const computed = window.getComputedStyle(el);
-            const props = ['backgroundColor', 'color', 'borderColor', 'outlineColor', 'fill', 'stroke'];
-            props.forEach(p => {
-              const val = (computed as any)[p];
-              if (val && (val.includes('oklab') || val.includes('oklch'))) {
-                (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
-              }
-              if (el.style) {
-                const inlineVal = (el.style as any)[p];
-                if (inlineVal && (inlineVal.includes('oklab') || inlineVal.includes('oklch'))) {
-                  (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
-                }
-              }
-            });
-          }
-        }
-      });
-      const headerImg = headerCanvas.toDataURL('image/jpeg', 1.0);
-
-      // Capture Content
-      const contentCanvas = await html2canvas(clone, { 
-        scale: 2, 
-        backgroundColor: '#fff', 
-        useCORS: true,
-        onclone: (clonedDoc) => {
-          const elements = clonedDoc.getElementsByTagName('*');
-          for (let i = 0; i < elements.length; i++) {
-            const el = elements[i] as HTMLElement;
-            const computed = window.getComputedStyle(el);
-            const props = ['backgroundColor', 'color', 'borderColor', 'outlineColor', 'fill', 'stroke'];
-            props.forEach(p => {
-              const val = (computed as any)[p];
-              if (val && (val.includes('oklab') || val.includes('oklch'))) {
-                (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
-              }
-              if (el.style) {
-                const inlineVal = (el.style as any)[p];
-                if (inlineVal && (inlineVal.includes('oklab') || inlineVal.includes('oklch'))) {
-                  (el.style as any)[p] = (p === 'backgroundColor') ? 'transparent' : 'inherit';
-                }
-              }
-            });
-          }
-        }
-      });
-      const contentImg = contentCanvas.toDataURL('image/jpeg', 1.0);
+      // Report Info (Right Aligned)
+      doc.setTextColor(245, 158, 11); // accent yellow
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      const reportTitle = activeTab === 'dash' ? 'DASHBOARD SUMMARY' : `${activeTab.replace('-', ' ').toUpperCase()} REPORT`;
+      const titleWidth = doc.getTextWidth(reportTitle);
+      doc.text(reportTitle, pageWidth - 15, 18, { align: 'right' });
       
-      document.body.removeChild(container);
+      // Divider line in info block
+      doc.setDrawColor(241, 245, 249);
+      doc.setLineWidth(0.5);
+      doc.line(pageWidth - 15 - titleWidth, 20, pageWidth - 15, 20);
 
-      const pdf = new (jsPDFConstructor as any)(orientation, 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
+      doc.setTextColor(51, 65, 85); // slate-700
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.text(`PREPARED BY: ${userEmail}`, pageWidth - 15, 24, { align: 'right' });
       
-      const headerH = (headerCanvas.height * pdfWidth) / headerCanvas.width;
-      const contentW = pdfWidth;
-      const contentH = (contentCanvas.height * pdfWidth) / contentCanvas.width;
-      
-      const margin = 10;
-      const footerH = 10;
-      const pageContentH = pdfHeight - headerH - footerH - (margin * 2);
-      
-      let heightLeft = contentH;
-      let position = 0;
-      let page = 1;
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.setFont("helvetica", "normal");
+      doc.text(`DATE: ${reportDate} | TIME: ${reportTime}`, pageWidth - 15, 28, { align: 'right' });
 
-      while (heightLeft > 0) {
-        if (page > 1) pdf.addPage();
-        
-        // 1. Draw Content Slice (using negative Y to shift the image up)
-        const position = -((page - 1) * pageContentH);
-        pdf.addImage(contentImg, 'JPEG', 0, headerH + margin + position, contentW, contentH, undefined, 'FAST');
-        
-        // 2. Clear Header Area (draw white rectangle over the top part of the slice)
-        pdf.setFillColor(255, 255, 255);
-        pdf.rect(0, 0, pdfWidth, headerH + margin, 'F');
-        
-        // 3. Draw Header on every page
-        pdf.addImage(headerImg, 'JPEG', 0, 0, pdfWidth, headerH);
-        
-        // 4. Clear Footer Area (draw white rectangle over the bottom part of the slice)
-        pdf.setFillColor(255, 255, 255);
-        pdf.rect(0, pdfHeight - footerH, pdfWidth, footerH, 'F');
-        
-        // 5. Add Page Number and Footer Text
-        pdf.setFontSize(8);
-        pdf.setTextColor(150);
-        pdf.text(`Alpha Clothing Ltd. Production System | Page ${page}`, margin, pdfHeight - 5);
-        
-        heightLeft -= pageContentH;
-        page++;
+      // 2. Prepare Data (Sorted according to user preference: Buyer > Style > PO > Color)
+      let headers: string[] = [];
+      let body: any[][] = [];
+
+      if (activeTab === 'master') {
+        headers = ['SL', 'BUYER', 'STYLE', 'PO NO', 'SHIP DATE', 'COLOR', 'QTY'];
+        body = sortedOrders.map((o, i) => [
+          i + 1, 
+          o.buyer, 
+          o.style, 
+          o.poNo, 
+          o.shipDate ? format(parseISO(o.shipDate), 'dd-MMM-yy') : '—', 
+          o.color, 
+          o.orderQty.toLocaleString()
+        ]);
+      } else if (activeTab === 'entry') {
+        headers = ['DATE', 'PO NO', 'COLOR', 'LINE', 'CUT', 'SEW', 'WASH', 'FIN IN', 'FIN OUT', 'POLY', 'SHIP'];
+        body = sortedEntries.map(e => [
+          e.date ? format(parseISO(e.date), 'dd-MMM-yy') : '—', 
+          e.poNo, 
+          e.color, 
+          e.lineNo || e.floor || 'N/A', 
+          e.cut || 0, 
+          e.sewOut || 0, 
+          e.washR || 0, 
+          e.finIn || 0, 
+          e.finOut || 0, 
+          e.poly || 0, 
+          e.shipment || 0
+        ]);
+      } else if (activeTab === 'wip') {
+        headers = ['BUYER', 'STYLE', 'PO NO', 'ORDER', 'CUT', 'SEW', 'WASH', 'FIN', 'POLY', 'SHIP'];
+        // Sorting unique POs by Buyer > Style > PO via poLookupMap
+        const uniquePOs: string[] = Array.from(new Set(sortedOrders.map(o => o.poNo)));
+        body = uniquePOs.map((po: string) => {
+          const info = getPOInfo(po);
+          const poEnts = entries.filter(e => e.poNo === po);
+          return [
+            info?.buyer || 'N/A',
+            info?.style || 'N/A',
+            po,
+            info?.totalQty.toLocaleString() || '0',
+            poEnts.reduce((s, e) => s + (e.cut||0), 0).toLocaleString(),
+            poEnts.reduce((s, e) => s + (e.sewOut||0), 0).toLocaleString(),
+            poEnts.reduce((s, e) => s + (e.washR||0), 0).toLocaleString(),
+            poEnts.reduce((s, e) => s + (e.finOut||0), 0).toLocaleString(),
+            poEnts.reduce((s, e) => s + (e.poly||0), 0).toLocaleString(),
+            poEnts.reduce((s, e) => s + (e.shipment||0), 0).toLocaleString(),
+          ];
+        });
+      } else if (activeTab === 'dpr') {
+        headers = ['DATE', 'BUYER', 'STYLE', 'PO NO', 'COLOR', 'CUT', 'SEW', 'WASH', 'FIN', 'POLY'];
+        body = sortedEntries.slice(0, 500).map(e => {
+          const info = getPOInfo(e.poNo);
+          return [
+            e.date ? format(parseISO(e.date), 'dd-MMM-yy') : '—', 
+            info?.buyer || 'N/A', 
+            info?.style || 'N/A', 
+            e.poNo, 
+            e.color, 
+            (e.cut||0).toLocaleString(), 
+            (e.sewOut||0).toLocaleString(), 
+            (e.washR||0).toLocaleString(), 
+            (e.finOut||0).toLocaleString(), 
+            (e.poly||0).toLocaleString()
+          ];
+        });
+      } else if (activeTab === 'dash') {
+        headers = ['METRIC', 'VALUE'];
+        const totalCut = entries.reduce((s, e) => s + (e.cut || 0), 0);
+        const totalSew = entries.reduce((s, e) => s + (e.sewOut || 0), 0);
+        const totalPoly = entries.reduce((s, e) => s + (e.poly || 0), 0);
+        const totalShip = entries.reduce((s, e) => s + (e.shipment || 0), 0);
+        const totalOrder = orders.reduce((s, o) => s + (o.orderQty || 0), 0);
+        body = [
+          ['Total Orders', orders.length],
+          ['Total Order Qty', totalOrder.toLocaleString()],
+          ['Total Cutting', totalCut.toLocaleString()],
+          ['Total Sewing Out', totalSew.toLocaleString()],
+          ['Total Poly/Finishing', totalPoly.toLocaleString()],
+          ['Total Shipment', totalShip.toLocaleString()],
+          ['Overall Achievement', totalOrder ? Math.round((totalPoly / totalOrder) * 100) + '%' : '0%']
+        ];
+      } else {
+        headers = ['METRIC', 'VALUE'];
+        body = [['Project Stat', 'Application Active']];
       }
 
-      pdf.save(`ACL_${activeTab.toUpperCase()}_${format(new Date(), 'ddMMMyy_HHmm')}.pdf`);
-      addToast('Professional PDF Generated', 'ok');
+      // 3. Generate Table
+      autoTable(doc, {
+        head: [headers],
+        body: body,
+        startY: 45,
+        theme: 'grid',
+        styles: { 
+          fontSize: 8.5, 
+          cellPadding: 3, 
+          halign: 'center', 
+          textColor: [15, 23, 42],
+          overflow: 'linebreak'
+        },
+        headStyles: { 
+          fillColor: [15, 23, 42], 
+          textColor: [255, 255, 255], 
+          fontStyle: 'bold',
+          fontSize: 9.5,
+          minCellHeight: 10
+        },
+        alternateRowStyles: { fillColor: [248, 250, 252] }
+      });
+
+      doc.save(`ACL_${activeTab.toUpperCase()}_${format(new Date(), 'ddMMMyy_HHmm')}.pdf`);
+      addToast('Vector PDF Generated Successfully', 'ok');
     } catch (error) {
       console.error('PDF Error:', error);
-      addToast('PDF Generation Failed', 'er');
+      addToast('Export System Error', 'er');
+    } finally {
+      setIsExporting(false);
     }
   };
 
   const exportExcel = async () => {
+    if (activeTab === 'custom-report' && reportBuilderRef.current) {
+      reportBuilderRef.current.exportToExcel();
+      return;
+    }
+
+    setIsExporting(true);
     try {
       addToast('Initializing Excel Engine...', 'in');
       const XLSX = await import('xlsx');
@@ -500,14 +563,34 @@ export default function App() {
       if (activeTab === 'master') {
         sheetName = "Order Master";
         rows.push(['SL', 'Buyer', 'Style', 'PO No', 'Ship Date', 'Color', 'Order Qty']);
-        orders.forEach((o, i) => {
-          rows.push([i + 1, o.buyer, o.style, o.poNo, o.shipDate, o.color, o.orderQty]);
+        sortedOrders.forEach((o, i) => {
+          rows.push([
+            i + 1, 
+            o.buyer, 
+            o.style, 
+            o.poNo, 
+            o.shipDate ? format(parseISO(o.shipDate), 'dd-MMM-yy') : '—', 
+            o.color, 
+            o.orderQty
+          ]);
         });
       } else if (activeTab === 'entry') {
         sheetName = "Production Entries";
         rows.push(['Date', 'PO No', 'Color', 'Line/Floor', 'Cut', 'Sew Out', 'Wash R', 'Fin In', 'Fin Out', 'Poly', 'Shipment']);
-        entries.forEach(e => {
-          rows.push([e.date, e.poNo, e.color, e.lineNo || e.floor || 'N/A', e.cut, e.sewOut, e.washR, e.finIn, e.finOut, e.poly, e.shipment]);
+        sortedEntries.forEach(e => {
+          rows.push([
+            e.date ? format(parseISO(e.date), 'dd-MMM-yy') : '—', 
+            e.poNo, 
+            e.color, 
+            e.lineNo || e.floor || 'N/A', 
+            e.cut, 
+            e.sewOut, 
+            e.washR, 
+            e.finIn, 
+            e.finOut, 
+            e.poly, 
+            e.shipment
+          ]);
         });
       } else if (activeTab === 'dashboard') {
         sheetName = "Dashboard Summary";
@@ -533,7 +616,7 @@ export default function App() {
           'Shipment', 'Stock'
         ]);
         
-        const uniquePOs: string[] = Array.from(new Set(entries.map(e => e.poNo)));
+        const uniquePOs: string[] = Array.from(new Set(sortedEntries.map(e => e.poNo)));
         uniquePOs.forEach((po, i) => {
           const info = getPOInfo(po);
           if (!info) return;
@@ -659,6 +742,8 @@ export default function App() {
     } catch (error) {
       console.error('Excel Error:', error);
       addToast('Excel Export Failed', 'er');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -692,302 +777,284 @@ export default function App() {
   const navPosition = appSettings.navPosition || 'top';
 
   const navTabs = [
-    { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data' },
-    { id: 'master', label: 'Order Master', icon: Database, perm: 'view-data' },
-    { id: 'entry', label: 'Data Entry', icon: Keyboard, perm: 'view-data' },
-    { id: 'fin-track', label: 'Finishing', icon: ArrowRightLeft, perm: 'view-data' },
-    { id: 'custom-report', label: 'Analytics', icon: FileSpreadsheet, perm: 'view-data' },
+    { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data', mobile: true },
+    { id: 'master', label: 'Orders', icon: Database, perm: 'view-data', mobile: true },
+    { id: 'ship-schedule', label: 'Schedule', icon: Truck, perm: 'view-data', mobile: true },
+    { id: 'entry', label: 'Entry', icon: Keyboard, perm: 'view-data', mobile: true },
+    { id: 'fin-track', label: 'Finishing', icon: Waves, perm: 'view-data' },
+    { id: 'custom-report', label: 'Analytics', icon: PieChart, perm: 'view-data' },
     { id: 'status', label: 'Tracking', icon: Target, perm: 'view-data' },
-    { id: 'dpr', label: 'DPR', icon: FileText, perm: 'view-data' },
-    { id: 'wip', label: 'WIP Audit', icon: BarChart3, perm: 'view-data' },
-    { id: 'settings', label: 'Settings', icon: Settings2 },
+    { id: 'dpr', label: 'DPR', icon: ClipboardList, perm: 'view-data' },
+    { id: 'wip', label: 'WIP Audit', icon: Activity, perm: 'view-data' },
+    { id: 'lib', label: 'Library', icon: Library, perm: 'manage-orders', mobile: true },
+    { id: 'health', label: 'Health', icon: ShieldCheck, perm: 'view-data' },
+    { id: 'settings', label: 'Settings', icon: Settings2, mobile: true },
   ];
+
+  const filteredNavTabs = navTabs.filter(tab => !tab.perm || hasPermission(tab.perm));
+  const mobileTabs = filteredNavTabs.filter(tab => tab.mobile);
 
   return (
     <div className={cn(
-      "min-h-screen bg-bg text-fg font-sans selection:bg-accent selection:text-slate-950 flex",
-      navPosition === 'side' ? "flex-row" : "flex-col"
+      "h-screen h-[100dvh] bg-bg text-fg font-sans selection:bg-accent selection:text-slate-950 flex flex-col md:flex-row overflow-hidden transition-all duration-500",
     )}>
+      {/* Toast Notification Matrix */}
       <AnimatePresence>
         {toasts.length > 0 && (
-          <div className="fixed top-24 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
+          <div className="fixed top-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none">
             {toasts.map(t => (
               <motion.div
                 key={t.id}
-                initial={{ opacity: 0, x: 50, scale: 0.9 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: 20, scale: 0.95 }}
+                initial={{ opacity: 0, x: 50, filter: 'blur(10px)' }}
+                animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, x: 20, filter: 'blur(5px)' }}
                 className={cn(
-                  "p-4 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-xl border border-white/10 text-xs font-black uppercase tracking-widest pointer-events-auto min-w-[300px]",
-                  t.type === 'ok' ? "bg-success/20 text-success border-success/30" : 
-                  t.type === 'er' ? "bg-danger/20 text-danger border-danger/30" : 
-                  "bg-info/20 text-info border-info/30"
+                  "p-4 rounded-xl shadow-2xl flex items-center gap-4 backdrop-blur-3xl border border-white/10 text-[10px] font-black uppercase tracking-widest pointer-events-auto min-w-[320px] relative overflow-hidden",
+                  t.type === 'ok' ? "bg-success/10 text-success border-success/30" : 
+                  t.type === 'er' ? "bg-danger/10 text-danger border-danger/30" : 
+                  "bg-info/10 text-info border-info/30"
                 )}
               >
-                {t.type === 'ok' && <CheckCircle2 size={14} />}
-                {t.type === 'er' && <AlertCircle size={14} />}
-                {t.type === 'in' && <InfoIcon size={14} />}
-                {t.msg}
+                <div className="absolute top-0 left-0 w-1 h-full bg-current opacity-50" />
+                <div className="w-8 h-8 rounded-lg bg-current/10 flex items-center justify-center shrink-0">
+                  {t.type === 'ok' && <CheckCircle2 size={16} />}
+                  {t.type === 'er' && <AlertCircle size={16} />}
+                  {t.type === 'in' && <InfoIcon size={16} />}
+                </div>
+                <div className="flex flex-col gap-1">
+                   <div className="opacity-60 text-[8px] tracking-[0.2em]">System Alert</div>
+                   <div>{t.msg}</div>
+                </div>
               </motion.div>
             ))}
           </div>
         )}
       </AnimatePresence>
 
-      {/* Side Navigation Layout */}
-      {navPosition === 'side' && (
-        <aside className={cn(
-          "w-72 bg-bg2/95 backdrop-blur-3xl border-r border-border h-screen sticky top-0 flex flex-col no-print z-50 overflow-y-auto no-scrollbar shadow-2xl transition-all duration-500 shrink-0",
-          appSettings.compactMode ? "w-20" : "w-72"
-        )}>
-          {/* Side Logo */}
-          <div className="p-6 flex items-center gap-4 border-b border-border/50">
-             <div className="w-12 h-12 rounded-xl bg-slate-900 border border-accent/20 flex items-center justify-center shrink-0 shadow-lg">
-                <img src="/logo-2.png" alt="logo" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
-             </div>
-             {!appSettings.compactMode && (
-               <div>
-                  <h1 className="text-lg font-black tracking-tighter leading-none">ALPHA ERP</h1>
-                  <span className="text-[8px] font-black text-accent uppercase tracking-widest mt-1 block">Production Control</span>
-               </div>
-             )}
-          </div>
-
-          <div className="flex-1 px-3 space-y-1 mt-6">
-            {navTabs.map(tab => {
-               if (tab.perm && !hasPermission(tab.perm)) return null;
-               const isActive = activeTab === tab.id;
-               return (
-                 <button
-                   key={tab.id}
-                   onClick={() => setActiveTab(tab.id)}
-                   className={cn(
-                     "w-full flex items-center gap-4 p-3.5 rounded-2xl transition-all group relative",
-                     isActive 
-                       ? "bg-accent text-slate-950 shadow-xl shadow-accent/20 font-black" 
-                       : "text-muted hover:bg-white/5 hover:text-fg font-bold"
-                   )}
-                 >
-                    <tab.icon size={20} className={cn(isActive ? "text-slate-950" : "text-muted group-hover:text-fg")} />
-                    {!appSettings.compactMode && (
-                      <span className="text-[11px] uppercase tracking-widest">{tab.label}</span>
-                    )}
-                    {isActive && (
-                      <motion.div layoutId="activeNavSide" className="absolute left-0 w-1 h-6 bg-slate-950 rounded-full" />
-                    )}
-                 </button>
-               );
-            })}
-          </div>
-
-          {/* User Profile Summary Side */}
-          {!appSettings.compactMode && user && (
-            <div className="p-4 m-3 rounded-2xl bg-white/5 border border-border mt-auto">
-               <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-slate-950 font-black">
-                     {user.email?.[0].toUpperCase()}
-                  </div>
-                  <div className="overflow-hidden">
-                     <div className="text-[10px] font-black uppercase truncate">{user.email}</div>
-                     <div className="text-[9px] text-accent font-bold uppercase tracking-widest">{userProfile?.role}</div>
-                  </div>
-               </div>
-            </div>
-          )}
-        </aside>
-      )}
-
-      {/* Main Content Wrapper */}
-      <div className={cn("flex-1 flex flex-col min-w-0 overflow-hidden", navPosition === 'side' ? "min-h-screen" : "")}>
-        {/* Sticky Header Wrapper (Top/Horizontal Only) */}
-        {navPosition === 'top' && (
-          <div className="sticky top-0 z-50 no-print shadow-2xl shadow-slate-950/20">
-            {/* Header */}
-            <header className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 py-2.5 relative z-20">
-              <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="relative w-12 h-12 rounded-xl overflow-hidden shadow-lg group cursor-pointer border border-accent/20 bg-slate-900/80 backdrop-blur-xl">
-                    <img 
-                      src="/logo-2.png" 
-                      alt="Alpha Clothing Logo" 
-                      className="w-full h-full object-contain p-1"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.src = "/logo.png";
-                      }}
-                    />
-                  </div>
-                  <div className="hidden lg:block">
-                    <h1 className="text-xl font-black tracking-tighter leading-none text-fg font-display">
-                      ALPHA CLOTHING LTD
-                    </h1>
-                    <p className="text-[9px] text-accent font-black uppercase tracking-[0.2em] mt-1">
-                      The Best Look Anytime Anywhere
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <div className="hidden md:flex flex-col items-end border-r border-border pr-4 h-8 justify-center">
-                    <div className="flex items-center gap-2 text-[10px] font-black text-fg">
-                        <Clock size={12} className="text-accent animate-pulse" />
-                        <span className="font-mono">{format(time, 'HH:mm:ss')}</span>
-                        <span className="opacity-40">|</span>
-                        <span>{format(time, 'dd MMM yy')}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <div className="relative">
-                      <button 
-                        className="btn btn-p btn-s gap-2 rounded-xl h-9 px-4 shadow-lg shadow-accent/10" 
-                        onClick={() => setIsDownloadOpen(!isDownloadOpen)}
-                      >
-                        <Download size={14} /> <span className="hidden sm:inline text-[10px] font-black tracking-widest uppercase">Export HUB</span>
-                      </button>
-                      <AnimatePresence>
-                        {isDownloadOpen && (
-                          <>
-                            <div className="fixed inset-0 z-[100]" onClick={() => setIsDownloadOpen(false)} />
-                            <motion.div 
-                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                              className="absolute right-0 mt-4 w-60 bg-bg2/98 backdrop-blur-2xl border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[110] overflow-hidden"
-                            >
-                              <button onClick={() => { downloadPDF(); setIsDownloadOpen(false); }} className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-accent/10 flex items-center gap-4 border-b border-border transition-colors">
-                                <FileText size={16} className="text-accent" /> Download as PDF
-                              </button>
-                              <button onClick={() => { exportExcel(); setIsDownloadOpen(false); }} className="w-full text-left px-5 py-4 text-[12px] font-bold hover:bg-success/10 flex items-center gap-4 transition-colors">
-                                <Download size={16} className="text-success" /> Download as Excel
-                              </button>
-                            </motion.div>
-                          </>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                    
-                    <button className="btn btn-o btn-s rounded-xl border-border hover:bg-accent/10 p-2 h-9 w-9" onClick={toggleTheme}>
-                      {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </header>
-
-            {/* Top Tabs */}
-            <div className="bg-bg2/90 backdrop-blur-xl border-b border-border px-5 relative z-10">
-              <div className="max-w-[1700px] mx-auto flex gap-2 overflow-x-auto no-scrollbar py-1">
-                {navTabs.map((tab: any) => {
-                  if (tab.perm && !hasPermission(tab.perm)) return null;
-                  const isActive = activeTab === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={cn(
-                        "relative px-3.5 py-2 text-[11px] font-bold transition-all whitespace-nowrap flex items-center gap-2 rounded-lg my-0.5",
-                        isActive 
-                          ? "text-accent bg-accent/10 shadow-inner" 
-                          : "text-muted hover:text-fg hover:bg-white/5"
-                      )}
-                    >
-                      <tab.icon size={16} className={cn(isActive ? "text-accent" : "text-muted")} />
-                      {tab.label}
-                      {isActive && (
-                        <motion.div 
-                          layoutId="activeTab"
-                          className="absolute bottom-0 left-2 right-2 h-0.5 bg-accent rounded-full"
-                        />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+      {/* Desktop Navigation Core (Collapsible Sidebar) - Smart & Narrow */}
+      <aside 
+        className={cn(
+          "hidden md:flex flex-col bg-bg2/40 border-r border-border/40 backdrop-blur-3xl transition-all duration-500 ease-in-out relative z-50 no-print",
+          isSidebarCollapsed ? "w-[72px]" : "w-[240px]"
         )}
+      >
+        {/* Sidebar Toggle Pivot */}
+        <button 
+          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          className="absolute -right-3 top-10 w-6 h-6 bg-accent rounded-full flex items-center justify-center text-slate-950 shadow-lg z-[60] hover:scale-110 active:scale-95 transition-all border-2 border-bg"
+        >
+          <motion.div animate={{ rotate: isSidebarCollapsed ? 0 : 180 }}>
+            <ChevronRight size={14} />
+          </motion.div>
+        </button>
 
-        {/* Minimal Header for Side Navigation (Mobile/Tablet) */}
-        {navPosition === 'side' && (
-           <header className={cn("sticky top-0 z-[60] bg-bg2/90 backdrop-blur-xl border-b border-border p-3 flex items-center justify-between no-print", appSettings.compactMode ? "" : "lg:hidden")}>
-              <div className="flex items-center gap-3">
-                 <img src="/logo-2.png" alt="logo" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
-                 <h1 className="text-sm font-black tracking-tight">ALPHA CLOTHING</h1>
-              </div>
-              <div className="flex items-center gap-2">
-                 <div className="flex gap-1 overflow-x-auto no-scrollbar max-w-[160px]">
-                    {navTabs.slice(0, 4).map(t => (
-                        <button key={t.id} onClick={() => setActiveTab(t.id)} className={cn("p-2 rounded-lg", activeTab === t.id ? "bg-accent text-slate-950" : "text-muted")}>
-                           <t.icon size={14} />
-                        </button>
-                    ))}
-                 </div>
-                 <button className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-slate-950 font-black text-[10px]">
-                   {user.email?.[0].toUpperCase()}
-                 </button>
-              </div>
-           </header>
-        )}
-
-        {/* Main Content Area */}
-        <main id="report-content" className={cn("mx-auto p-4 lg:p-6 flex-1 w-full", navPosition === 'top' ? "max-w-[1700px]" : "max-w-[1900px]")} ref={contentRef}>
-          <React.Suspense fallback={
-            <div className="flex flex-col items-center justify-center p-32 gap-6">
-              <div className="relative">
-                <div className="w-16 h-16 border-4 border-accent/10 rounded-full" />
-                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-t-accent rounded-full animate-spin" />
-              </div>
-              <p className="text-[10px] font-black text-fg/60 dark:text-muted uppercase tracking-[0.5em] animate-pulse">Initializing Component...</p>
-            </div>
-          }>
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, y: 15, scale: 0.995 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -15, scale: 0.995 }}
-                transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-                className="w-full h-full"
+        {/* Brand Matrix */}
+        <div className="h-16 px-5 flex items-center gap-4 border-b border-border/20 overflow-hidden shrink-0">
+          <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center shrink-0 shadow-lg group">
+            <Target size={22} className="text-slate-950 group-hover:scale-110 transition-transform" />
+          </div>
+          <AnimatePresence>
+            {!isSidebarCollapsed && (
+              <motion.div 
+                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
+                className="whitespace-nowrap"
               >
-                {activeTab === 'dash' && <Dashboard orders={orders} entries={entries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
-                {activeTab === 'master' && <OrderMaster orders={orders} addToast={addToast} userProfile={userProfile} />}
-                {activeTab === 'entry' && <DataEntry orders={orders} entries={entries} getPOInfo={getPOInfo} addToast={addToast} userProfile={userProfile} />}
-                {activeTab === 'fin-track' && <FinishingTracker orders={orders} />}
-                {activeTab === 'status' && <StatusReport orders={orders} entries={entries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
-                {activeTab === 'dpr' && <DPRReport orders={orders} entries={entries} getPOInfo={getPOInfo} />}
-                {activeTab === 'wip' && <WIPReport orders={orders} entries={entries} getPOInfo={getPOInfo} poAggregates={aggregates.poMap} />}
-                {activeTab === 'custom-report' && <ReportBuilder orders={orders} entries={entries} />}
-                {activeTab === 'health' && <SystemHealth orders={orders} entries={entries} />}
-                {activeTab === 'about' && <AboutSection />}
-                {activeTab === 'settings' && (
-                  <SettingsModule 
-                    orders={orders} 
-                    entries={entries} 
-                    userProfile={userProfile}
-                    currentTheme={theme}
-                    setTheme={setTheme}
-                    appSettings={appSettings}
-                    updateAppSettings={updateAppSettings}
-                  />
-                )}
+                <div className="text-[14px] font-black uppercase tracking-tighter leading-none mb-0.5 italic">ALPHA<span className="text-accent underline underline-offset-4">ERP</span></div>
+                <div className="text-[8px] font-black uppercase tracking-[0.2em] text-muted leading-none">Core Operations</div>
               </motion.div>
-            </AnimatePresence>
-          </React.Suspense>
-        </main>
+            )}
+          </AnimatePresence>
+        </div>
 
-        {/* Footer */}
-        <footer className="bg-bg2 border-t border-border px-5 py-2.5 no-print">
-          <div className="max-w-[1700px] mx-auto flex items-center justify-between">
-            <span className="text-[10px] text-muted flex items-center gap-1.5 uppercase tracking-widest font-black">
-              <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-              Real-time Syc Active
-            </span>
-            <span className="text-[10px] text-muted font-mono uppercase tracking-widest">ALPHA PRO-TECH SERIES v5.1</span>
-          </div>
-        </footer>
-      </div>
+        {/* Navigation Matrix */}
+        <nav className="flex-1 overflow-y-auto no-scrollbar px-3 py-6 space-y-1">
+          {filteredNavTabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "w-full flex items-center transition-all duration-300 rounded-xl relative group overflow-hidden h-11 px-3",
+                activeTab === tab.id 
+                  ? "bg-accent text-slate-950 font-black shadow-lg shadow-accent/20" 
+                  : "text-muted hover:bg-white/5 hover:text-fg"
+              )}
+              title={isSidebarCollapsed ? tab.label : ""}
+            >
+              <tab.icon size={20} className={cn("shrink-0 transition-transform group-hover:scale-110", activeTab === tab.id ? "" : "opacity-60")} />
+              <AnimatePresence>
+                {!isSidebarCollapsed && (
+                  <motion.span 
+                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap ml-4"
+                  >
+                    {tab.label}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+              {activeTab === tab.id && (
+                <motion.div layoutId="side-tab-bar" className="absolute left-0 w-0.5 h-4 bg-slate-950 rounded-full" />
+              )}
+            </button>
+          ))}
+        </nav>
+
+        {/* Sidebar Status Matrix */}
+        <div className="p-3 border-t border-border/20 bg-slate-950/20">
+           <div className={cn("flex flex-col gap-1", isSidebarCollapsed ? "items-center" : "")}>
+              <button onClick={toggleTheme} className="w-full flex items-center px-3 py-2.5 rounded-xl text-muted hover:bg-white/5 transition-all group" title="Theme Matrix">
+                 {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Interface Theme</span>}
+              </button>
+              <button onClick={downloadPDF} className="w-full flex items-center px-3 py-2.5 rounded-xl text-muted hover:bg-white/5 transition-all group" title="System Export">
+                 <Download size={20} className="group-hover:text-accent" />
+                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Full Report</span>}
+              </button>
+              <button onClick={handleLogout} className="w-full flex items-center px-3 py-2.5 rounded-xl text-danger/60 hover:bg-danger/10 hover:text-danger transition-all group" title="Emergency Sign Out">
+                 <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
+                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Secure Sign-out</span>}
+              </button>
+           </div>
+        </div>
+      </aside>
+
+      {/* Main Framework Viewport */}
+      <main className="flex-1 flex flex-col h-full overflow-hidden bg-bg relative">
+         {/* Static Overlay Noise */}
+         <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] z-0" />
+         
+         {/* Smart Status Bar - Narrow & Professional */}
+         <header className="h-14 px-6 border-b border-border/20 flex items-center justify-between no-print z-10 backdrop-blur-2xl">
+            <div className="flex items-center gap-6">
+               <div className="md:hidden p-2 text-muted" onClick={() => setIsMobileMenuOpen(true)}>
+                  <LayoutDashboard size={20} />
+               </div>
+               <div className="flex items-center gap-3">
+                  <span className="sst text-[8px] opacity-40">System Core</span>
+                  <ChevronRight size={10} className="text-muted/20" />
+                  <span className="st text-sm tracking-[0.2em]">{filteredNavTabs.find(t => t.id === activeTab)?.label}</span>
+               </div>
+            </div>
+            
+            <div className="flex items-center gap-8">
+               <div className="hidden lg:flex items-center gap-6 border-r border-border/20 pr-8">
+                  <DigitalClock />
+                  <div className="w-10 h-10 rounded-xl bg-slate-800 border border-white/5 flex items-center justify-center text-[11px] font-black text-accent shadow-inner">
+                     {user.email?.charAt(0).toUpperCase()}
+                  </div>
+               </div>
+               <div className="flex items-center gap-3">
+                  <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_rgba(34,197,94,1)]" />
+                  <span className="text-[9px] font-black uppercase tracking-widest text-success">Secure Real-time</span>
+               </div>
+            </div>
+         </header>
+
+         {/* Dynamic Grid Viewport */}
+         <div id="report-content" className="flex-1 overflow-y-auto custom-scrollbar p-6 pb-24 md:pb-6 relative z-10">
+            <React.Suspense fallback={
+               <div className="h-full flex flex-col items-center justify-center opacity-30 gap-6">
+                  <div className="w-16 h-16 border-4 border-accent/10 border-t-accent rounded-full animate-spin shadow-2xl shadow-accent/20" />
+                  <div className="flex flex-col items-center gap-2">
+                     <p className="text-[12px] font-black uppercase tracking-[0.4em] animate-pulse">Synchronizing Interface</p>
+                     <p className="text-[8px] font-black uppercase tracking-[0.1em] text-muted">Alpha Core Matrix v5.5.4</p>
+                  </div>
+               </div>
+            }>
+               <AnimatePresence mode="wait">
+                  <motion.div
+                    key={activeTab}
+                    initial={{ opacity: 0, y: 10, filter: 'blur(5px)' }}
+                    animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, y: -10, filter: 'blur(5px)' }}
+                    transition={{ duration: 0.3 }}
+                    className="mx-auto w-full max-w-[1800px]"
+                  >
+                    {activeTab === 'dash' && <Dashboard orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
+                    {activeTab === 'master' && <OrderMaster orders={sortedOrders} addToast={addToast} userProfile={userProfile} />}
+                    {activeTab === 'ship-schedule' && <ShipmentSchedule orders={sortedOrders} />}
+                    {activeTab === 'entry' && <DataEntry orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} addToast={addToast} userProfile={userProfile} />}
+                    {activeTab === 'fin-track' && <FinishingTracker orders={sortedOrders} entries={sortedEntries} addToast={addToast} userProfile={userProfile} />}
+                    {activeTab === 'status' && <StatusReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
+                    {activeTab === 'dpr' && <DPRReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} />}
+                    {activeTab === 'wip' && <WIPReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poAggregates={aggregates.poMap} />}
+                    {activeTab === 'lib' && <ExcelLibrary />}
+                    {activeTab === 'custom-report' && <ReportBuilder ref={reportBuilderRef} orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} />}
+                    {activeTab === 'health' && <SystemHealth orders={sortedOrders} entries={sortedEntries} />}
+                    {activeTab === 'settings' && (
+                      <SettingsModule 
+                        orders={orders} 
+                        entries={entries} 
+                        userProfile={userProfile}
+                        currentTheme={theme}
+                        setTheme={setTheme}
+                        appSettings={appSettings}
+                        updateAppSettings={updateAppSettings}
+                        onLogout={handleLogout}
+                      />
+                    )}
+                  </motion.div>
+               </AnimatePresence>
+            </React.Suspense>
+         </div>
+
+         {/* Compact Footer Bar */}
+         <footer className="h-10 bg-bg2/80 border-t border-border/20 px-6 flex items-center justify-between no-print shrink-0 relative z-20 backdrop-blur-3xl">
+            <div className="flex items-center gap-4">
+               <span className="text-[9px] font-black text-muted uppercase tracking-widest pl-2 border-l border-accent/30">System Ready</span>
+            </div>
+            <div className="flex items-center gap-6 divide-x divide-white/5">
+               <span className="text-[9px] font-black text-muted uppercase tracking-[0.2em] pl-6">Core Engine v5.54</span>
+               <span className="hidden sm:block text-[9px] font-black text-muted uppercase tracking-[0.2em] pl-6">Access: {userProfile?.role?.toUpperCase()}</span>
+            </div>
+         </footer>
+      </main>
+
+      {/* Mobile Framework - Minimal Nav */}
+      <nav className="fixed bottom-0 left-0 right-0 md:hidden bg-bg2/90 backdrop-blur-3xl border-t border-border/40 h-16 flex items-center justify-around px-2 z-[100] no-print">
+         {mobileTabs.slice(0, 4).map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={cn("flex flex-col items-center gap-1 w-12", activeTab === tab.id ? "text-accent" : "text-muted")}>
+               <tab.icon size={20} />
+               <span className="text-[8px] font-black uppercase tracking-tight">{tab.label.split(' ')[0]}</span>
+            </button>
+         ))}
+         <button onClick={() => setIsMobileMenuOpen(true)} className="flex flex-col items-center gap-1 text-muted w-12">
+            <Plus size={20} />
+            <span className="text-[8px] font-black uppercase tracking-tight">Menu</span>
+         </button>
+      </nav>
+
+      {/* Mobile Sidebar Overlay Matrix */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMobileMenuOpen(false)} className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200]" />
+            <motion.div 
+               initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }}
+               className="fixed inset-y-0 left-0 w-[85%] max-w-[320px] bg-bg border-r border-border/50 z-[201] flex flex-col p-6 shadow-3xl"
+            >
+               <div className="flex items-center justify-between mb-10">
+                  <div className="st">Operations</div>
+                  <X size={20} onClick={() => setIsMobileMenuOpen(false)} />
+               </div>
+               <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar">
+                  {filteredNavTabs.map(tab => (
+                     <button key={tab.id} onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }} className={cn("w-full flex items-center gap-4 p-4 rounded-xl", activeTab === tab.id ? "bg-accent text-slate-950 font-bold" : "text-muted hover:bg-white/5")}>
+                        <tab.icon size={20} />
+                        <span className="text-xs uppercase tracking-widest">{tab.label}</span>
+                     </button>
+                  ))}
+               </div>
+               <div className="mt-auto pt-6 border-t border-border/20 space-y-4">
+                  <div className="flex items-center justify-between">
+                     <span className="sst">Theme Mode</span>
+                     <button onClick={toggleTheme} className="p-3 bg-white/5 rounded-xl">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
+                  </div>
+                  <button onClick={handleLogout} className="w-full py-4 bg-danger/10 text-danger rounded-xl text-[10px] font-black uppercase tracking-widest">Secure Exit</button>
+               </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

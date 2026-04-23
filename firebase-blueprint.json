@@ -82,6 +82,54 @@
         "userId": { "type": "string" }
       },
       "required": ["date", "style", "poNo", "color", "lineNo", "input", "output", "userId"]
+    },
+    "DashboardConfig": {
+      "title": "Dashboard Configuration",
+      "description": "Custom analytics layout preferences for users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "visibleBlocks": {
+          "type": "object",
+          "properties": {
+            "overview": { "type": "boolean" },
+            "achievement": { "type": "boolean" },
+            "productionTrend": { "type": "boolean" },
+            "buyerAnalytics": { "type": "boolean" },
+            "recentStatus": { "type": "boolean" },
+            "gaugeMeter": { "type": "boolean" }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "visibleBlocks"]
+    },
+    "AppSetting": {
+      "title": "Application Settings",
+      "description": "Global application appearance and behavior settings",
+      "type": "object",
+      "properties": {
+        "primaryColor": { "type": "string" },
+        "fontSize": { "type": "string", "enum": ["xs", "sm", "md", "lg", "xl"] },
+        "fontFamily": { "type": "string" },
+        "navPosition": { "type": "string", "enum": ["top", "left"] },
+        "compactMode": { "type": "boolean" },
+        "highContrast": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ExcelFile": {
+      "title": "Excel File Library",
+      "description": "Knowledge repository for structured data extraction",
+      "type": "object",
+      "properties": {
+        "fileName": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" },
+        "uploadedBy": { "type": "string" },
+        "rowCount": { "type": "number" },
+        "content": { "type": "string" }
+      },
+      "required": ["fileName", "uploadedAt", "uploadedBy", "rowCount", "content"]
     }
   },
   "firestore": {
@@ -104,6 +152,18 @@
     "/finishing_tracking/{entryId}": {
       "schema": "FinishingTrackingEntry",
       "description": "Independent finishing line-wise tracking entries"
+    },
+    "/dashboard_configs/{userId}": {
+      "schema": "DashboardConfig",
+      "description": "Per-user dashboard layout customization"
+    },
+    "/settings/global": {
+      "schema": "AppSetting",
+      "description": "Global application configuration"
+    },
+    "/excel_files/{fileId}": {
+      "schema": "ExcelFile",
+      "description": "Library of uploaded Excel files for data collection"
     }
   }
 }

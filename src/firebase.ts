@@ -8,8 +8,8 @@ export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export const addAuditLog = async (
-  action: 'ADD' | 'EDIT' | 'DELETE' | 'LOGIN' | 'LOGOUT' | 'DOWNLOAD' | 'STATUS_CHANGE' | 'PERMISSION_CHANGE', 
-  entity: 'ORDER' | 'ENTRY' | 'USER' | 'SETTINGS' | 'REPORT' | 'PRODUCTION', 
+  action: 'ADD' | 'EDIT' | 'DELETE' | 'LOGIN' | 'LOGOUT' | 'DOWNLOAD' | 'STATUS_CHANGE' | 'PERMISSION_CHANGE' | 'UPLOAD' | 'IMPORT', 
+  entity: 'ORDER' | 'ENTRY' | 'USER' | 'SETTINGS' | 'REPORT' | 'PRODUCTION' | 'EXCEL', 
   details: string, 
   path: string
 ) => {

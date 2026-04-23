@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Pencil, Trash2, Database, X, Save, Search, FileUp, AlertCircle, CheckCircle2, History as HistoryIcon, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, Database, Layers, X, Save, Search, FileUp, AlertCircle, CheckCircle2, History as HistoryIcon, ChevronUp, ChevronDown, ChevronsUpDown, Minus } from 'lucide-react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry } from '../types';
 import { BUYERS } from '../constants';
@@ -8,6 +8,7 @@ import { format, parseISO, parse, isValid } from 'date-fns';
 import { db, addAuditLog } from '../firebase';
 import { collection, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
 import HistoricalImportModal from './HistoricalImportModal';
+import CollectFromExcelModal from './CollectFromExcelModal';
 
 interface OrderMasterProps {
   orders: Order[];
@@ -15,15 +16,17 @@ interface OrderMasterProps {
   userProfile: { role: string; permissions?: string[] } | null;
 }
 
-export default function OrderMaster({ orders, addToast, userProfile }: OrderMasterProps) {
+export default React.memo(function OrderMaster({ orders, addToast, userProfile }: OrderMasterProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isBulkUpdateModalOpen, setIsBulkUpdateModalOpen] = useState(false);
   const [isHistoricalModalOpen, setIsHistoricalModalOpen] = useState(false);
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string | number>>(new Set());
   const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: keyof Order; direction: 'asc' | 'desc' } | null>({ key: 'poNo', direction: 'desc' });
@@ -58,13 +61,15 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
         return 0;
       });
     } else {
-      // Default fallback sort
+      // Default hierarchical sort (Buyer > Style > PO > Color)
       result.sort((a, b) => {
-        const buyerCmp = a.buyer.localeCompare(b.buyer);
+        const buyerCmp = (a.buyer || '').localeCompare(b.buyer || '');
         if (buyerCmp !== 0) return buyerCmp;
-        const styleCmp = a.style.localeCompare(b.style);
+        const styleCmp = (a.style || '').localeCompare(b.style || '');
         if (styleCmp !== 0) return styleCmp;
-        return a.poNo.localeCompare(b.poNo);
+        const poCmp = (a.poNo || '').localeCompare(b.poNo || '');
+        if (poCmp !== 0) return poCmp;
+        return (a.color || '').localeCompare(b.color || '');
       });
     }
 
@@ -73,6 +78,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
 
   const handleSort = (key: keyof Order) => {
     setSortConfig(prev => {
+      // If we are clearing sort or changing key, we stick to the default multi-level logic
       if (prev?.key === key) {
         if (prev.direction === 'asc') return { key, direction: 'desc' };
         return null;
@@ -93,8 +99,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
     style: '',
     poNo: '',
     shipDate: '',
-    color: '',
-    orderQty: 0
+    items: [{ color: '', orderQty: 0 }]
   });
 
   const openModal = (order: Order | null = null) => {
@@ -105,8 +110,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
         style: order.style || '',
         poNo: order.poNo || '',
         shipDate: order.shipDate || '',
-        color: order.color || '',
-        orderQty: order.orderQty || 0
+        items: [{ color: order.color || '', orderQty: order.orderQty || 0 }]
       });
     } else {
       setEditingOrder(null);
@@ -115,8 +119,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
         style: '',
         poNo: '',
         shipDate: format(new Date(), 'yyyy-MM-dd'),
-        color: '',
-        orderQty: 0
+        items: [{ color: '', orderQty: 0 }]
       });
     }
     setIsModalOpen(true);
@@ -250,38 +253,88 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
   };
 
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type } = e.target;
+    const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'number' ? (value === '' ? 0 : Number(value)) : value
+      [name]: value
+    }));
+  };
+
+  const handleItemChange = (index: number, field: 'color' | 'orderQty', value: string | number) => {
+    setFormData(prev => {
+      const newItems = [...prev.items];
+      newItems[index] = {
+        ...newItems[index],
+        [field]: field === 'orderQty' ? (value === '' ? 0 : Number(value)) : value
+      };
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const addRow = () => {
+    setFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { color: '', orderQty: 0 }]
+    }));
+  };
+
+  const removeRow = (index: number) => {
+    if (formData.items.length <= 1) return;
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
     }));
   };
 
   const saveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.buyer || !formData.style || !formData.poNo || !formData.shipDate || !formData.color || !formData.orderQty) {
+    if (!formData.buyer || !formData.style || !formData.poNo || !formData.shipDate) {
       addToast('Please fill all required fields', 'er');
       return;
     }
 
-    const orderData: Omit<Order, 'id'> = { ...formData };
-
-    // Duplicate check: PO + Color must be unique
-    const isDuplicate = orders.some(o => 
-      o.poNo === orderData.poNo && 
-      o.color.toLowerCase() === orderData.color.toLowerCase() && 
-      (!editingOrder || o.id !== editingOrder.id)
-    );
-
-    if (isDuplicate) {
-      addToast(`Color "${orderData.color}" already exists for PO "${orderData.poNo}"`, 'er');
+    const invalidItems = formData.items.some(item => !item.color.trim() || item.orderQty <= 0);
+    if (invalidItems) {
+      addToast('Please provide valid color and quantity for all items', 'er');
       return;
+    }
+
+    // Check for duplicate colors within the form
+    const formColors = formData.items.map(i => i.color.toLowerCase().trim());
+    const hasInternalDuplicate = formColors.length !== new Set(formColors).size;
+    if (hasInternalDuplicate) {
+      addToast('Duplicate colors found in the form', 'er');
+      return;
+    }
+
+    // Check for duplicates against database
+    for (const item of formData.items) {
+      const isDuplicate = orders.some(o => 
+        o.poNo === formData.poNo && 
+        o.color.toLowerCase() === item.color.toLowerCase().trim() && 
+        (!editingOrder || o.id !== editingOrder.id)
+      );
+
+      if (isDuplicate) {
+        addToast(`Color "${item.color}" already exists for PO "${formData.poNo}"`, 'er');
+        return;
+      }
     }
 
     setLoading(true);
     try {
       if (editingOrder) {
+        const item = formData.items[0]; // Edits only ever have one item
+        const orderData = {
+          buyer: formData.buyer,
+          style: formData.style,
+          poNo: formData.poNo,
+          shipDate: formData.shipDate,
+          color: item.color,
+          orderQty: item.orderQty
+        };
+
         await updateDoc(doc(db, 'orders', String(editingOrder.id)), orderData);
         
         await addAuditLog(
@@ -293,16 +346,29 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
 
         addToast('Order updated', 'ok');
       } else {
-        const docRef = await addDoc(collection(db, 'orders'), orderData);
+        const batch = writeBatch(db);
+        formData.items.forEach(item => {
+          const newDocRef = doc(collection(db, 'orders'));
+          batch.set(newDocRef, {
+            buyer: formData.buyer,
+            style: formData.style,
+            poNo: formData.poNo,
+            shipDate: formData.shipDate,
+            color: item.color.trim(),
+            orderQty: item.orderQty
+          });
+        });
+
+        await batch.commit();
         
         await addAuditLog(
           'ADD', 
           'ORDER', 
-          `Added New Order: PO ${orderData.poNo}, Color ${orderData.color}`,
-          `/orders/${docRef.id}`
+          `Added ${formData.items.length} New Orders for PO ${formData.poNo}`,
+          `/orders`
         );
 
-        addToast('Order added', 'ok');
+        addToast(`${formData.items.length} orders added successfully`, 'ok');
       }
       closeModal();
     } catch (err) {
@@ -318,180 +384,295 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2 no-print">
-        <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Database size={20} className="text-accent" />
-            Order Master
-          </h2>
-          <p className="text-[11px] text-muted">Manage buyers, styles, POs, and order quantities</p>
+      {/* Search & Actions Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 no-print border-b border-white/5 pb-4">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 bg-accent/10 rounded-xl flex items-center justify-center text-accent ring-1 ring-accent/20">
+            <Layers size={20} />
+          </div>
+          <div>
+            <div className="flex items-center gap-3">
+              <h2 className="text-xl font-black uppercase tracking-tighter leading-none">Order Master</h2>
+              <div className="flex items-center gap-2">
+                {hasPermission('manage-orders') && (
+                  <button 
+                    onClick={() => openModal()}
+                    className="w-7 h-7 bg-accent/10 text-accent rounded-lg flex items-center justify-center hover:bg-accent hover:text-white transition-all shadow-[0_0_15px_rgba(var(--accent),0.2)] hover:shadow-[0_0_20px_rgba(var(--accent),0.4)] border border-accent/30 group"
+                    title="Add New Order"
+                  >
+                    <Plus size={16} className="group-hover:rotate-90 transition-transform" />
+                  </button>
+                )}
+                <button 
+                  onClick={() => setIsCollectModalOpen(true)}
+                  className="w-7 h-7 bg-success/10 text-success rounded-lg flex items-center justify-center hover:bg-success hover:text-white transition-all shadow-[0_0_15px_rgba(34,197,94,0.1)] hover:shadow-[0_0_20px_rgba(34,197,94,0.3)] border border-success/30 group"
+                  title="Collect From Excel"
+                >
+                  <FileUp size={14} className="group-hover:scale-110 transition-transform" />
+                </button>
+                <button 
+                  onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+                  className={cn(
+                    "w-7 h-7 rounded-lg flex items-center justify-center transition-all border",
+                    isFiltersOpen 
+                      ? "bg-accent text-white border-accent shadow-[0_0_15px_rgba(var(--accent),0.3)]" 
+                      : "bg-white/5 border-white/10 text-muted hover:text-fg hover:bg-white/10"
+                  )}
+                  title="Toggle Actions & Filters"
+                >
+                  <Search size={14} />
+                </button>
+              </div>
+            </div>
+            <p className="text-[9px] text-muted uppercase tracking-[0.2em] font-black mt-1">System Core / Order Database</p>
+          </div>
         </div>
-        <div className="flex items-center gap-2 flex-1 md:flex-none min-w-[250px]">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={14} />
+
+        <div className="flex items-center gap-4">
+          {/* Internal Database Search */}
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted/50" />
             <input
               type="text"
-              placeholder="Search PO, Buyer or Style..."
-              className="fi pl-10 h-10 rounded-xl"
+              placeholder="Search matrix..."
+              className="fi pl-9 h-10 w-48 lg:w-64 bg-white/5 border-white/5 text-[11px] rounded-xl focus:ring-accent/20"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          {hasPermission('manage-orders') && (
-            <div className="flex gap-2">
-              <button 
-                className="btn btn-o h-10 px-4 gap-2 text-accent border-accent/20 hover:bg-accent/5 rounded-xl" 
-                onClick={() => setIsHistoricalModalOpen(true)}
-                title="Import previous production data"
-              >
-                <HistoryIcon size={16} /> Historical Import
-              </button>
-              <button className="btn btn-o h-10 px-4 gap-2 rounded-xl" onClick={() => setIsBulkModalOpen(true)}>
-                <FileUp size={16} /> Bulk Import
-              </button>
-              <button className="btn btn-p h-10 px-4 gap-2 rounded-xl" onClick={() => openModal()}>
-                <Plus size={16} /> Add Order
-              </button>
+        </div>
+      </div>
+
+      {/* Stats and Floating Panel */}
+      <div className="relative">
+        <AnimatePresence>
+          {isFiltersOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              className="absolute top-0 right-0 z-50 mt-2 mb-6 p-4 bg-card/80 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl ring-1 ring-white/10 w-full md:w-auto min-w-[300px]"
+            >
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                  <span className="text-[10px] font-bold text-muted uppercase tracking-wider">Quick Actions</span>
+                  <button onClick={() => setIsFiltersOpen(false)} className="text-muted hover:text-fg"><X size={14} /></button>
+                </div>
+                
+                {hasPermission('manage-orders') && (
+                  <div className="grid grid-cols-2 gap-2 pb-2">
+                    <button 
+                      className="btn btn-o h-9 gap-2 text-[10px] rounded-xl border-white/5 hover:bg-white/5" 
+                      onClick={() => { setIsCollectModalOpen(true); setIsFiltersOpen(false); }}
+                    >
+                      <Database size={14} /> Collect
+                    </button>
+                    <button 
+                      className="btn btn-o h-9 gap-2 text-[10px] rounded-xl border-white/5 hover:bg-white/5" 
+                      onClick={() => { setIsHistoricalModalOpen(true); setIsFiltersOpen(false); }}
+                    >
+                      <HistoryIcon size={14} /> History
+                    </button>
+                    <button 
+                      className="btn btn-o h-9 gap-2 text-[10px] rounded-xl border-white/5 hover:bg-white/5 col-span-2" 
+                      onClick={() => { setIsBulkModalOpen(true); setIsFiltersOpen(false); }}
+                    >
+                      <FileUp size={14} /> Bulk Master Import
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[9px] font-bold text-muted uppercase ml-1">Database Health</span>
+                    <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                      <div className="h-full bg-accent w-[85%] rounded-full shadow-[0_0_10px_rgba(var(--accent),0.5)]" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="bg-bg2/30 backdrop-blur-md border border-white/5 rounded-2xl p-4 flex items-center gap-6 flex-wrap shadow-xl ring-1 ring-white/5 no-print mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-accent/10 flex items-center justify-center text-accent ring-1 ring-accent/20 font-black text-xs uppercase">
+              DB
             </div>
+            <div>
+              <div className="text-[10px] text-muted font-bold uppercase tracking-tight">Active Orders</div>
+              <div className="text-lg font-black leading-none">{filteredOrders.length}</div>
+            </div>
+          </div>
+
+          <div className="w-px h-8 bg-white/5" />
+
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 ring-1 ring-emerald-500/20 font-black text-xs uppercase">
+              VOL
+            </div>
+            <div>
+              <div className="text-[10px] text-muted font-bold uppercase tracking-tight">Total Volume</div>
+              <div className="text-lg font-black leading-none">{(totalQty || 0).toLocaleString()}</div>
+            </div>
+          </div>
+          
+          <div className="w-px h-8 bg-white/5" />
+
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500 ring-1 ring-amber-500/20 font-black text-xs uppercase">
+              PO
+            </div>
+            <div>
+              <div className="text-[10px] text-muted font-bold uppercase tracking-tight">Unique POs</div>
+              <div className="text-lg font-black leading-none">{uniquePOs}</div>
+            </div>
+          </div>
+
+          {selectedIds.size > 0 && hasPermission('manage-orders') && (
+            <motion.div 
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="flex items-center gap-3 border-l border-white/5 pl-6 ml-auto"
+            >
+              <span className="text-[10px] text-accent font-black uppercase bg-accent/10 px-2 py-1 rounded-md">{selectedIds.size} Selected</span>
+              <div className="flex gap-1">
+                <button className="p-2 bg-accent/10 text-accent hover:bg-accent hover:text-white rounded-lg transition-all" onClick={() => setIsBulkUpdateModalOpen(true)} title="Bulk Edit">
+                  <Pencil size={14} />
+                </button>
+                <button className="p-2 bg-danger/10 text-danger hover:bg-danger hover:text-white rounded-lg transition-all" onClick={() => setIsBulkDeleteConfirmOpen(true)} title="Bulk Delete">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </motion.div>
           )}
         </div>
       </div>
 
-      <div className="bg-bg2/50 backdrop-blur-sm border border-border rounded-2xl px-5 py-3 flex items-center gap-6 flex-wrap shadow-xl ring-1 ring-white/5 no-print">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent font-mono font-black text-xs shadow-inner">fx</div>
-          <span className="text-[11px] text-muted font-mono uppercase tracking-widest">
-            COUNT: <span className="text-accent font-black">{filteredOrders.length}</span>
-          </span>
-        </div>
-        <div className="w-px h-6 bg-border" />
-        <div className="text-[11px] text-muted font-mono uppercase tracking-widest">
-          SUM(Qty): <span className="text-accent font-black">{(totalQty || 0).toLocaleString()}</span>
-        </div>
-        <div className="w-px h-6 bg-border" />
-        <div className="text-[11px] text-muted font-mono uppercase tracking-widest">
-          UNIQUE(PO): <span className="text-accent font-black">{uniquePOs}</span>
-        </div>
-
-        {selectedIds.size > 0 && hasPermission('manage-orders') && (
-          <>
-            <div className="w-px h-6 bg-border" />
-            <div className="flex items-center gap-4 animate-in fade-in slide-in-from-left-2 duration-300">
-              <span className="text-[11px] text-accent font-black uppercase tracking-widest">
-                {selectedIds.size} Selected
-              </span>
-              <div className="flex gap-2">
-                <button 
-                  className="btn btn-a h-8 px-4 text-[10px] gap-2 rounded-lg shadow-lg shadow-info/20"
-                  onClick={() => setIsBulkUpdateModalOpen(true)}
-                >
-                  <Pencil size={14} /> Bulk Edit
-                </button>
-                <button 
-                  className="btn btn-d h-8 px-4 text-[10px] gap-2 rounded-lg shadow-lg shadow-danger/20"
-                  onClick={() => setIsBulkDeleteConfirmOpen(true)}
-                >
-                  <Trash2 size={14} /> Delete Selected
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="bg-bg2/50 backdrop-blur-xl border border-border rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/5">
-        <div className="overflow-x-auto max-h-[60vh] no-scrollbar">
-          <table className="et">
-            <thead>
-              <tr>
-                <th className="w-12">
+      <div className="bg-bg2/40 backdrop-blur-xl border border-white/5 rounded-3xl overflow-hidden shadow-2xl ring-1 ring-white/5">
+        <div className="overflow-x-auto max-h-[calc(100vh-280px)] custom-scrollbar">
+          <table className="w-full border-collapse text-left">
+            <thead className="sticky top-0 z-20 bg-bg2/95 backdrop-blur-md">
+              <tr className="border-b border-white/5">
+                <th className="py-3 px-4 w-12">
                   <div className="flex justify-center">
                     <input 
                       type="checkbox" 
-                      className="w-4 h-4 rounded-lg border-border bg-bg text-accent focus:ring-accent/30 transition-all cursor-pointer"
+                      className="w-4 h-4 rounded border-white/10 bg-white/5 text-accent focus:ring-accent/30 transition-all cursor-pointer"
                       checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
                       onChange={toggleSelectAll}
                     />
                   </div>
                 </th>
-                <th className="w-10">#</th>
-                <th className="text-left cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('buyer')}>
+                <th className="py-3 px-2 text-[10px] font-black text-muted/50 uppercase tracking-widest text-center w-10">#</th>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('buyer')}>
                   <div className="flex items-center gap-2">
                     Buyer {getSortIcon('buyer')}
                   </div>
                 </th>
-                <th className="text-left cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('style')}>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('style')}>
                   <div className="flex items-center gap-2">
                     Style {getSortIcon('style')}
                   </div>
                 </th>
-                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('poNo')}>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group text-center" onClick={() => handleSort('poNo')}>
                   <div className="flex items-center justify-center gap-2">
                     PO No {getSortIcon('poNo')}
                   </div>
                 </th>
-                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('shipDate')}>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group text-center" onClick={() => handleSort('shipDate')}>
                   <div className="flex items-center justify-center gap-2">
                     Ship Date {getSortIcon('shipDate')}
                   </div>
                 </th>
-                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('color')}>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group text-center" onClick={() => handleSort('color')}>
                   <div className="flex items-center justify-center gap-2">
                     Color {getSortIcon('color')}
                   </div>
                 </th>
-                <th className="cursor-pointer hover:bg-white/5 transition-colors group" onClick={() => handleSort('orderQty')}>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest cursor-pointer hover:bg-white/5 transition-colors group text-center" onClick={() => handleSort('orderQty')}>
                   <div className="flex items-center justify-center gap-2">
-                    Order Qty {getSortIcon('orderQty')}
+                    Qty {getSortIcon('orderQty')}
                   </div>
                 </th>
-                <th className="no-print">Action</th>
+                <th className="py-3 px-4 text-[10px] font-black text-muted uppercase tracking-widest text-center no-print">Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-white/[0.02]">
               {filteredOrders.map((order, i) => (
-                <tr key={order.id} className={cn("transition-colors", selectedIds.has(order.id) ? "bg-accent/10" : "hover:bg-white/5")}>
-                  <td>
+                <motion.tr 
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  key={order.id} 
+                  className={cn(
+                    "transition-all duration-200 group h-10", 
+                    selectedIds.has(order.id) ? "bg-accent/10" : "hover:bg-white/[0.02]"
+                  )}
+                >
+                  <td className="px-4">
                     <div className="flex justify-center">
                       <input 
                         type="checkbox" 
-                        className="w-4 h-4 rounded-lg border-border bg-bg text-accent focus:ring-accent/30 transition-all cursor-pointer"
+                        className="w-4 h-4 rounded border-white/10 bg-white/5 text-accent focus:ring-accent/30 transition-all cursor-pointer"
                         checked={selectedIds.has(order.id)}
                         onChange={() => toggleSelect(order.id)}
                       />
                     </div>
                   </td>
-                  <td className="num text-muted/50">{i + 1}</td>
-                  <td className="text-left font-black text-fg">{order.buyer}</td>
-                  <td className="text-left font-mono text-[11px] opacity-70">{order.style}</td>
-                  <td className="font-mono font-black text-accent text-[11px]">{order.poNo}</td>
-                  <td className="text-[11px] font-bold">{safeFormat(order.shipDate)}</td>
-                  <td className="text-[11px]">{order.color}</td>
-                  <td className="num font-black text-fg">{(order.orderQty || 0).toLocaleString()}</td>
-                  <td className="no-print">
-                    <div className="flex gap-2 justify-center">
+                  <td className="px-2 text-center text-[10px] font-mono text-muted/30">{i + 1}</td>
+                  <td className="px-4">
+                    <div className="text-xs font-black text-fg mb-0.5">{order.buyer}</div>
+                  </td>
+                  <td className="px-4">
+                    <div className="text-[10px] font-mono opacity-50 truncate max-w-[120px]">{order.style}</div>
+                  </td>
+                  <td className="px-4 text-center">
+                    <div className="inline-block px-2 py-0.5 bg-accent/5 rounded-md text-[10px] font-black text-accent border border-accent/10 font-mono">
+                      {order.poNo}
+                    </div>
+                  </td>
+                  <td className="px-4 text-center">
+                    <div className="text-[10px] font-bold opacity-70 italic font-mono">{safeFormat(order.shipDate)}</div>
+                  </td>
+                  <td className="px-4 text-center">
+                    <div className="text-[10px] font-medium opacity-80">{order.color}</div>
+                  </td>
+                  <td className="px-4 text-center">
+                    <div className="text-xs font-black text-fg font-mono">{(order.orderQty || 0).toLocaleString()}</div>
+                  </td>
+                  <td className="px-4 no-print">
+                    <div className="flex justify-center translate-x-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300">
                       {hasPermission('manage-orders') ? (
-                        <>
-                          <button className="btn btn-o btn-s rounded-lg hover:bg-accent/10 hover:text-accent border-border/50" onClick={() => openModal(order)}>
+                        <div className="flex items-center bg-bg shadow-2xl border border-white/5 rounded-lg p-1 scale-90">
+                          <button className="p-1.5 hover:bg-accent/10 hover:text-accent rounded-md transition-colors" onClick={() => openModal(order)} title="Edit">
                             <Pencil size={12} />
                           </button>
-                          <button className="btn btn-d btn-s rounded-lg hover:bg-danger/10 hover:text-danger border-border/50" onClick={() => handleDeleteClick(order.id)}>
+                          <div className="w-px h-3 bg-white/5 mx-1" />
+                          <button className="p-1.5 hover:bg-danger/10 hover:text-danger rounded-md transition-colors" onClick={() => handleDeleteClick(order.id)} title="Delete">
                             <Trash2 size={12} />
                           </button>
-                        </>
+                        </div>
                       ) : (
-                        <span className="text-[10px] text-muted italic">View Only</span>
+                        <span className="text-[9px] text-muted italic">View Only</span>
                       )}
                     </div>
                   </td>
-                </tr>
+                </motion.tr>
               ))}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-24 text-center text-muted">
-                    <Database size={48} className="mx-auto mb-4 opacity-10" />
-                    <h3 className="text-lg font-bold opacity-40">No orders found</h3>
-                    <p className="text-sm opacity-30">Click "Add Order" to start building your database</p>
+                  <td colSpan={9} className="py-32 text-center">
+                    <div className="flex flex-col items-center justify-center gap-4 opacity-20">
+                      <div className="p-8 rounded-full bg-white/5 ring-1 ring-white/10">
+                        <Database size={64} className="animate-pulse" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="text-xl font-black uppercase tracking-widest">Database Empty</h3>
+                        <p className="text-[10px] font-mono tracking-wider">Awaiting mission parameters...</p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -500,8 +681,21 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
         </div>
       </div>
 
+
       {/* Modal */}
       <AnimatePresence>
+        {isCollectModalOpen && (
+          <CollectFromExcelModal 
+            type="orders"
+            orders={orders}
+            onClose={() => setIsCollectModalOpen(false)}
+            onSuccess={(count) => {
+              addToast(`Knowledge Base Refined: ${count} orders integrated`, 'ok');
+              setIsCollectModalOpen(false);
+            }}
+          />
+        )}
+        
         {isModalOpen && (
           <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
             <motion.div
@@ -528,7 +722,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
                 </button>
               </div>
 
-              <form onSubmit={saveOrder} className="p-6 space-y-4">
+              <form onSubmit={saveOrder} className="p-6 space-y-5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-bold text-muted uppercase tracking-wider">Buyer *</label>
@@ -558,20 +752,73 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
                     <label className="text-[11px] font-bold text-muted uppercase tracking-wider">Ship Date *</label>
                     <input name="shipDate" type="date" value={formData.shipDate} onChange={handleFormChange} className="fi" required />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-muted uppercase tracking-wider">Color *</label>
-                    <input name="color" type="text" value={formData.color} onChange={handleFormChange} className="fi" placeholder="e.g. Flintstone" required />
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-muted uppercase tracking-widest">Colors & Quantities *</label>
+                    {!editingOrder && (
+                      <button 
+                        type="button" 
+                        onClick={addRow}
+                        className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center text-accent hover:bg-accent hover:text-white transition-all shadow-sm"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    )}
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-muted uppercase tracking-wider">Order Qty *</label>
-                    <input name="orderQty" type="number" value={formData.orderQty || ''} onChange={handleFormChange} className="fi" min="1" required />
+                  
+                  <div className="space-y-3 max-h-[30vh] overflow-y-auto custom-scrollbar pr-1">
+                    {formData.items.map((item, idx) => (
+                      <motion.div 
+                        key={idx}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-end border-b border-border/10 pb-3 sm:border-0 sm:pb-0"
+                      >
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[9px] text-muted font-bold uppercase ml-1 block sm:hidden">Color</span>
+                          {idx === 0 && <span className="text-[9px] text-muted font-bold uppercase ml-1 hidden sm:block">Color</span>}
+                          <input 
+                            value={item.color} 
+                            onChange={(e) => handleItemChange(idx, 'color', e.target.value)} 
+                            className="fi h-10" 
+                            placeholder="Color name" 
+                            required 
+                          />
+                        </div>
+                        <div className="w-full sm:w-32 space-y-1">
+                          <span className="text-[9px] text-muted font-bold uppercase ml-1 block sm:hidden">Order Qty</span>
+                          {idx === 0 && <span className="text-[9px] text-muted font-bold uppercase ml-1 hidden sm:block">Order Qty</span>}
+                          <input 
+                            type="number" 
+                            value={item.orderQty || ''} 
+                            onChange={(e) => handleItemChange(idx, 'orderQty', e.target.value)} 
+                            className="fi h-10" 
+                            placeholder="Qty" 
+                            min="1" 
+                            required 
+                          />
+                        </div>
+                        {!editingOrder && formData.items.length > 1 && (
+                          <button 
+                            type="button" 
+                            onClick={() => removeRow(idx)}
+                            className="h-10 sm:h-10 sm:w-10 rounded-xl bg-danger/5 text-danger/40 hover:text-danger hover:bg-danger/10 flex items-center justify-center transition-colors px-4 sm:px-0"
+                          >
+                            <X size={14} className="mr-2 sm:mr-0" />
+                            <span className="sm:hidden text-[10px] font-bold">Remove Item</span>
+                          </button>
+                        )}
+                      </motion.div>
+                    ))}
                   </div>
                 </div>
 
                 <div className="pt-4 flex justify-end gap-3">
                   <button type="button" onClick={closeModal} className="btn btn-o">Cancel</button>
-                  <button type="submit" className="btn btn-p">
-                    <Save size={14} /> {editingOrder ? 'Update Order' : 'Save Order'}
+                  <button type="submit" className="btn btn-p" disabled={loading}>
+                    <Save size={14} /> {loading ? 'Saving...' : (editingOrder ? 'Update Order' : 'Save Orders')}
                   </button>
                 </div>
               </form>
@@ -786,7 +1033,7 @@ export default function OrderMaster({ orders, addToast, userProfile }: OrderMast
       </AnimatePresence>
     </div>
   );
-}
+});
 
 interface BulkImportModalProps {
   onClose: () => void;
@@ -922,28 +1169,26 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
           orderQty: qty
         };
 
-        // Refined Duplicate Check: Buyer + Style + PO No + Color
+        // Strict Duplicate Check: PO No + Color
         const isDuplicateInImport = results.some(r => 
           !r.error &&
-          r.buyer === orderData.buyer &&
-          r.style.toLowerCase() === orderData.style.toLowerCase() &&
-          r.poNo === orderData.poNo && 
-          r.color.toLowerCase() === orderData.color.toLowerCase()
+          r.poNo.toLowerCase().trim() === poNo.toLowerCase().trim() && 
+          r.color.toLowerCase().trim() === color.toLowerCase().trim()
         );
 
         const isDuplicateInDB = existingOrders.some(o => 
-          o.buyer === orderData.buyer &&
-          o.style.toLowerCase() === orderData.style.toLowerCase() &&
-          o.poNo === orderData.poNo && 
-          o.color.toLowerCase() === orderData.color.toLowerCase()
+          o.poNo.toLowerCase().trim() === poNo.toLowerCase().trim() && 
+          o.color.toLowerCase().trim() === color.toLowerCase().trim()
         );
 
-        if (isDuplicateInImport || isDuplicateInDB) {
-          rowError = `Duplicate Entry (Style: ${style}, PO: ${poNo}, Color: ${color})`;
-          errs.push(`Row ${idx + 1}: ${rowError}`);
+        const isDuplicate = isDuplicateInImport || isDuplicateInDB;
+        
+        if (isDuplicate) {
+          rowError = `DUPLICATE`;
+          errs.push(`Row ${idx + 1}: Duplicate entry (PO: ${poNo}, Color: ${color})`);
         }
         
-        results.push({ ...orderData, error: rowError });
+        results.push({ ...orderData, error: rowError, isDuplicate: !!isDuplicate });
       } catch (e) {
         const msg = 'Invalid data format';
         errs.push(`Row ${idx + 1}: ${msg}`);
@@ -964,11 +1209,28 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
   };
 
   const handleConfirmSave = async () => {
-    const validData = parsedData.filter(r => !r.error);
-    if (validData.length === 0) return;
+    const dataToSave = parsedData.filter(r => !r.error || r.isDuplicate);
+    if (dataToSave.length === 0) return;
+
+    const duplicates = dataToSave.filter(r => r.isDuplicate);
+    if (duplicates.length > 0) {
+      const proceed = window.confirm(`${duplicates.length} duplicate orders were detected. Do you want to add them anyway?\n\n- Click 'OK' to add ALL (including duplicates).\n- Click 'Cancel' to ONLY add new unique orders.`);
+      
+      let finalData = dataToSave;
+      if (!proceed) {
+        finalData = dataToSave.filter(r => !r.isDuplicate);
+      }
+      
+      if (finalData.length === 0) return;
+      
+      setLoading(true);
+      await onSave(finalData);
+      setLoading(false);
+      return;
+    }
     
     setLoading(true);
-    await onSave(validData);
+    await onSave(dataToSave);
     setLoading(false);
   };
 
@@ -1075,12 +1337,22 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
                     </thead>
                     <tbody>
                       {parsedData.map((row, i) => (
-                        <tr key={i} className={cn(row.error && "bg-danger/10")}>
-                          <td className={cn(row.error && "text-danger font-bold")}>{row.style}</td>
-                          <td className={cn("font-bold", row.error ? "text-danger" : "text-accent")}>{row.poNo}</td>
-                          <td className={cn(row.error && "text-danger")}>{row.shipDate}</td>
-                          <td className={cn(row.error && "text-danger")}>{row.color}</td>
-                          <td className={cn("num", row.error && "text-danger")}>{row.orderQty.toLocaleString()}</td>
+                        <tr key={i} className={cn(
+                          row.error && row.error !== 'DUPLICATE' ? "bg-danger/10" : "",
+                          row.isDuplicate ? "bg-amber-500/5" : ""
+                        )}>
+                          <td className={cn(row.error && !row.isDuplicate && "text-danger font-bold")}>{row.style}</td>
+                          <td className={cn("font-bold", row.error && !row.isDuplicate ? "text-danger" : "text-accent")}>{row.poNo}</td>
+                          <td className={cn(row.error && !row.isDuplicate && "text-danger")}>{row.shipDate}</td>
+                          <td className={cn(row.error && !row.isDuplicate && "text-danger")}>{row.color}</td>
+                          <td className={cn("num", row.error && !row.isDuplicate && "text-danger")}>
+                            <div className="flex items-center gap-2">
+                              {row.orderQty.toLocaleString()}
+                              {row.isDuplicate && (
+                                <span className="bg-amber-500/20 text-amber-500 px-1 rounded-[4px] text-[8px] font-black uppercase tracking-tighter">Existing</span>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {parsedData.length === 0 && (
@@ -1100,10 +1372,15 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
 
         <div className="p-4 border-t border-border bg-bg2 flex justify-between items-center">
           <div className="text-xs text-muted">
-            Ready to import: <span className="text-accent font-bold">{parsedData.filter(r => !r.error).length}</span> orders
-            {parsedData.some(r => r.error) && (
+            Total Valid: <span className="text-accent font-bold">{parsedData.filter(r => !r.error || r.isDuplicate).length}</span> 
+            {parsedData.some(r => r.isDuplicate) && (
+              <span className="ml-2 text-amber-500 font-bold">
+                ({parsedData.filter(r => r.isDuplicate).length} duplicates)
+              </span>
+            )}
+            {parsedData.some(r => r.error && !r.isDuplicate) && (
               <span className="ml-2 text-danger font-bold">
-                ({parsedData.filter(r => r.error).length} errors found)
+                ({parsedData.filter(r => r.error && !r.isDuplicate).length} errors)
               </span>
             )}
           </div>
@@ -1112,9 +1389,9 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
             <button 
               onClick={handleConfirmSave} 
               className="btn btn-p px-8"
-              disabled={parsedData.filter(r => !r.error).length === 0 || loading}
+              disabled={parsedData.filter(r => !r.error || r.isDuplicate).length === 0 || loading}
             >
-              {loading ? 'Importing...' : 'Confirm & Save Valid'}
+              {loading ? 'Importing...' : 'Confirm & Save'}
             </button>
           </div>
         </div>

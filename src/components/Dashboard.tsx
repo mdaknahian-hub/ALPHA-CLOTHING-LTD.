@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useDeferredValue, useEffect } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -14,7 +14,9 @@ import {
   PieChart, 
   Pie, 
   Cell,
-  Legend
+  Legend,
+  RadialBarChart,
+  RadialBar
 } from 'recharts';
 import { 
   LayoutDashboard, 
@@ -27,11 +29,24 @@ import {
   Activity,
   Users,
   Calendar,
-  ChevronRight
+  ChevronRight,
+  Settings2,
+  Filter,
+  Search,
+  CheckCircle2,
+  ListFilter,
+  ArrowRight,
+  Save,
+  RotateCcw,
+  Zap
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry, POInfo } from '../types';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, startOfDay, endOfDay, isWithinInterval, subDays } from 'date-fns';
+import { db, auth } from '../firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import Gauge from './Gauge';
 
 interface DashboardProps {
   orders: Order[];
@@ -42,393 +57,533 @@ interface DashboardProps {
 
 const COLORS = ['#f59e0b', '#14b8a6', '#06b6d4', '#ef4444', '#8b5cf6', '#ec4899', '#84cc16', '#f97316'];
 
-export default function Dashboard({ orders, entries, getPOInfo, poColorAggregates = {} }: DashboardProps) {
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+export default React.memo(function Dashboard({ orders, entries, getPOInfo, poColorAggregates = {} }: DashboardProps) {
+  // --- Dashboard Filter States ---
+  const [dateRange, setDateRange] = useState({
+    start: format(subDays(new Date(), 30), 'yyyy-MM-dd'),
+    end: format(new Date(), 'yyyy-MM-dd')
+  });
+  const [searchStyle, setSearchStyle] = useState('');
+  const [searchBuyer, setSearchBuyer] = useState('');
+
+  const deferredStart = useDeferredValue(dateRange.start);
+  const deferredEnd = useDeferredValue(dateRange.end);
+  const deferredStyle = useDeferredValue(searchStyle);
+  const deferredBuyer = useDeferredValue(searchBuyer);
+
+  // --- Layout Customization ---
+  const [visibleBlocks, setVisibleBlocks] = useState({
+    overview: true,
+    achievement: true,
+    productionTrend: true,
+    buyerAnalytics: true,
+    recentStatus: true,
+    gaugeMeter: true
+  });
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+
+  // Load persistence
+  useEffect(() => {
+    const loadConfig = async () => {
+      if (!auth.currentUser) return;
+      try {
+        const configRef = doc(db, 'dashboard_configs', auth.currentUser.uid);
+        const configSnap = await getDoc(configRef);
+        if (configSnap.exists()) {
+          setVisibleBlocks(configSnap.data().visibleBlocks);
+        }
+      } catch (err) {
+        console.error("Error loading dashboard config:", err);
+      }
+    };
+    loadConfig();
+  }, []);
+
+  const saveLayout = async () => {
+    if (!auth.currentUser) return;
+    setSaveStatus('saving');
+    try {
+      const configRef = doc(db, 'dashboard_configs', auth.currentUser.uid);
+      await setDoc(configRef, {
+        userId: auth.currentUser.uid,
+        visibleBlocks,
+        updatedAt: new Date().toISOString()
+      });
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch (err) {
+      console.error("Error saving layout:", err);
+      setSaveStatus('idle');
+    }
+  };
+
+  const resetLayout = () => {
+    setVisibleBlocks({
+      overview: true,
+      achievement: true,
+      productionTrend: true,
+      buyerAnalytics: true,
+      recentStatus: true,
+      gaugeMeter: true
+    });
+  };
 
   const stats = useMemo(() => {
     let totalCut = 0, totalSewOut = 0, totalWashR = 0, totalFinOut = 0, totalPoly = 0, totalShipment = 0, totalOrderQty = 0;
     const buyerPoly: { [key: string]: number } = {};
     const buyerQty: { [key: string]: number } = {};
-    const dailyData: { [key: string]: { date: string, cut: number, poly: number, shipment: number } } = {};
-    const opTotals = { Cutting: 0, Sewing: 0, Wash: 0, Finishing: 0, Poly: 0, Shipment: 0 };
+    const dailyData: { [key: string]: { date: string, rawDate: string, cut: number, poly: number, shipment: number } } = {};
+    
+    // Performance context
+    const startObj = startOfDay(parseISO(deferredStart)).getTime();
+    const endObj = endOfDay(parseISO(deferredEnd)).getTime();
 
+    // Filtered entries based on range
     entries.forEach(e => {
-      totalCut += (e.cut || 0);
-      totalSewOut += (e.sewOut || 0);
-      totalWashR += (e.washR || 0);
-      totalFinOut += (e.finOut || 0);
-      totalPoly += (e.poly || 0);
-      totalShipment += (e.shipment || 0);
-
-      const info = getPOInfo(e.poNo);
-      const b = info?.buyer || 'Unknown';
-      buyerPoly[b] = (buyerPoly[b] || 0) + (e.poly || 0);
+      if (!e.date) return;
       
-      if (!dailyData[e.date]) {
-        dailyData[e.date] = { date: e.date, cut: 0, poly: 0, shipment: 0 };
+      // CRASH PROOF DATE PARSING
+      let eTime = 0;
+      try {
+        const parsedNode = parseISO(e.date);
+        if (isNaN(parsedNode.getTime())) {
+          // Attempt alternate recovery if not ISO
+          return; 
+        }
+        eTime = parsedNode.getTime();
+      } catch {
+        return;
       }
-      dailyData[e.date].cut += (e.cut || 0);
-      dailyData[e.date].poly += (e.poly || 0);
-      dailyData[e.date].shipment += (e.shipment || 0);
 
-      opTotals.Cutting += (e.cut || 0);
-      opTotals.Sewing += (e.sewOut || 0);
-      opTotals.Wash += (e.washR || 0);
-      opTotals.Finishing += (e.finOut || 0);
-      opTotals.Poly += (e.poly || 0);
-      opTotals.Shipment += (e.shipment || 0);
+      if (eTime >= startObj && eTime <= endObj) {
+        const info = getPOInfo(e.poNo);
+        if (info) {
+          const buyerMatch = !deferredBuyer || info.buyer.toLowerCase().includes(deferredBuyer.toLowerCase());
+          const styleMatch = !deferredStyle || info.style.toLowerCase().includes(deferredStyle.toLowerCase());
+          if (!buyerMatch || !styleMatch) return;
+        }
+
+        totalCut += (e.cut || 0);
+        totalSewOut += (e.sewOut || 0);
+        totalWashR += (e.washR || 0);
+        totalFinOut += (e.finOut || 0);
+        totalPoly += (e.poly || 0);
+        totalShipment += (e.shipment || 0);
+
+        const b = info?.buyer || 'Unknown';
+        buyerPoly[b] = (buyerPoly[b] || 0) + (e.poly || 0);
+        
+        const dateKey = e.date;
+        if (!dailyData[dateKey]) {
+          try {
+            dailyData[dateKey] = { date: format(parseISO(e.date), 'dd MMM'), rawDate: e.date, cut: 0, poly: 0, shipment: 0 };
+          } catch {
+            return;
+          }
+        }
+        dailyData[dateKey].cut += (e.cut || 0);
+        dailyData[dateKey].poly += (e.poly || 0);
+        dailyData[dateKey].shipment += (e.shipment || 0);
+      }
     });
 
-    // Calculate total order quantity from all orders (PO+Color combinations)
+    // Filtered orders for totals
     orders.forEach(o => {
+      const buyerMatch = !deferredBuyer || o.buyer.toLowerCase().includes(deferredBuyer.toLowerCase());
+      const styleMatch = !deferredStyle || o.style.toLowerCase().includes(deferredStyle.toLowerCase());
+      if (!buyerMatch || !styleMatch) return;
+
       totalOrderQty += o.orderQty;
       buyerQty[o.buyer] = (buyerQty[o.buyer] || 0) + o.orderQty;
     });
 
-    const uniquePOs = Array.from(new Set(entries.map(e => e.poNo)));
+    const trend = Object.values(dailyData).sort((a, b) => a.rawDate.localeCompare(b.rawDate));
 
-    const overallAch = totalOrderQty ? Math.round((totalPoly / totalOrderQty) * 100 * 10) / 10 : 0;
-    const overallShipAch = totalPoly ? Math.round((totalShipment / totalPoly) * 100 * 10) / 10 : 0;
-
-    // Order Status Visuals Data
-    const orderStatusData = orders.map(o => {
-      const pcKey = `${o.poNo}-${o.color}`;
-      const agg = poColorAggregates[pcKey] || { cut: 0, sewOut: 0, washR: 0, finIn: 0, finOut: 0, poly: 0, shipment: 0 };
-      const poly = agg.poly;
-      const shipment = agg.shipment;
-      const ach = o.orderQty ? Math.round((poly / o.orderQty) * 100) : 0;
-      const shipAch = poly ? Math.round((shipment / poly) * 100) : 0;
-      
-      return {
-        ...o,
-        poly,
-        shipment,
-        ach,
-        shipAch,
-        stock: poly - shipment
-      };
-    }).sort((a, b) => b.ach - a.ach);
-
-    const buyerChartData = Object.keys(buyerPoly).map(b => ({
+    // Gauge Meter Data (Achievement %)
+    const overallAch = totalOrderQty ? Math.round((totalPoly / totalOrderQty) * 100) : 0;
+    
+    const buyerChartData = Object.keys(buyerQty).map(b => ({
       name: b,
-      poly: buyerPoly[b],
-      ach: buyerQty[b] ? Math.round((buyerPoly[b] / buyerQty[b]) * 100 * 10) / 10 : 0
-    })).sort((a, b) => b.poly - a.poly);
+      Order: buyerQty[b],
+      Production: buyerPoly[b] || 0
+    })).sort((a, b) => b.Order - a.Order).slice(0, 8);
 
-    const trendChartData = Object.values(dailyData).sort((a, b) => a.date.localeCompare(b.date)).map(d => ({
-      ...d,
-      displayDate: safeFormat(d.date, 'dd-MMM-yy')
-    }));
+    // List of Top Orders by Achievement
+    const topPerformers = orders
+      .filter(o => {
+          const buyerMatch = !deferredBuyer || o.buyer.toLowerCase().includes(deferredBuyer.toLowerCase());
+          const styleMatch = !deferredStyle || o.style.toLowerCase().includes(deferredStyle.toLowerCase());
+          return buyerMatch && styleMatch;
+      })
+      .map(o => {
+        const pcKey = `${o.poNo}-${o.color}`;
+        const agg = poColorAggregates[pcKey] || { poly: 0 };
+        const ach = o.orderQty ? Math.round((agg.poly / o.orderQty) * 100) : 0;
+        return { ...o, ach };
+      })
+      .sort((a, b) => b.ach - a.ach)
+      .slice(0, 5);
 
-    const opChartData = Object.entries(opTotals).map(([name, value]) => ({ name, value }));
-
-    return {
-      totalCut, totalSewOut, totalPoly, totalShipment, overallAch, overallShipAch, activePOs: uniquePOs.length,
-      buyerChartData, trendChartData, opChartData, orderStatusData
+    return { 
+      totalCut, totalSewOut, totalPoly, totalShipment, totalOrderQty, 
+      overallAch, trend, buyerChartData, topPerformers
     };
-  }, [entries, getPOInfo, orders]);
-
-  const dailySummary = useMemo(() => {
-    const summary = {
-      cut: 0,
-      sewOut: 0,
-      poly: 0,
-      shipment: 0
-    };
-
-    entries.filter(e => e.date === selectedDate).forEach(e => {
-      summary.cut += (e.cut || 0);
-      summary.sewOut += (e.sewOut || 0);
-      summary.poly += (e.poly || 0);
-      summary.shipment += (e.shipment || 0);
-    });
-
-    return summary;
-  }, [entries, selectedDate]);
+  }, [orders, entries, deferredStart, deferredEnd, deferredBuyer, deferredStyle, getPOInfo, poColorAggregates]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <LayoutDashboard size={20} className="text-accent" />
-            Production Dashboard
-          </h2>
-          <p className="text-[11px] text-muted">Real-time performance metrics and production trends</p>
-        </div>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-        {[
-          { label: 'Total Cutting', value: stats.totalCut, icon: Scissors, color: 'accent', formula: '=SUM(Cut)' },
-          { label: 'Total Sewing Out', value: stats.totalSewOut, icon: Shirt, color: 'teal', formula: '=SUM(SewOut)' },
-          { label: 'Total Poly Entry', value: stats.totalPoly, icon: BoxIcon, color: 'info', formula: '=SUM(Poly)', highlight: true },
-          { label: 'Total Shipment', value: stats.totalShipment, icon: Activity, color: 'teal', formula: '=SUM(Shipment)' },
-          { label: 'Overall Achievement', value: `${stats.overallAch}%`, icon: Target, color: 'danger', formula: '=Poly/OrderQty', ach: stats.overallAch },
-          { label: 'Active Orders', value: stats.activePOs, icon: ClipboardList, color: 'purple', formula: '=UNIQUE(PO)' },
-        ].map((kpi, i) => (
-          <div key={i} className="bg-card border border-border rounded-xl p-4 relative overflow-hidden group hover:translate-y-1 transition-all shadow-lg">
-            <div className={cn("absolute top-0 left-0 right-0 h-1 bg-gradient-to-r", 
-              kpi.color === 'accent' && "from-accent to-accent2",
-              kpi.color === 'teal' && "from-teal to-emerald-400",
-              kpi.color === 'info' && "from-info to-cyan-400",
-              kpi.color === 'danger' && "from-danger to-red-400",
-              kpi.color === 'purple' && "from-purple-500 to-violet-400"
-            )} />
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-bold text-muted uppercase tracking-wider">{kpi.label}</span>
-              <kpi.icon size={16} className={cn(
-                kpi.color === 'accent' && "text-accent",
-                kpi.color === 'teal' && "text-teal",
-                kpi.color === 'info' && "text-info",
-                kpi.color === 'danger' && "text-danger",
-                kpi.color === 'purple' && "text-purple-500"
-              )} />
-            </div>
-            <div className={cn(
-              "text-2xl font-black num",
-              kpi.highlight && "text-success",
-              kpi.ach !== undefined && (kpi.ach >= 80 ? "text-success" : kpi.ach >= 50 ? "text-accent" : "text-danger")
-            )}>
-              {typeof kpi.value === 'number' ? kpi.value.toLocaleString() : kpi.value}
-            </div>
-            <div className="mt-2">
-              <span className="fb">{kpi.formula}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Buyer-wise Poly Output */}
-        <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-[11px] font-bold text-fg uppercase tracking-widest flex items-center gap-2">
-              <TrendingUp size={14} className="text-accent" />
-              Buyer-wise Poly Output <span className="fb ml-1">SUMIF</span>
-            </h3>
-          </div>
-          <div className="h-[280px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.buyerChartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2d3d" vertical={false} />
-                <XAxis 
-                  dataKey="name" 
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                />
-                <YAxis 
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                  tickFormatter={(val) => val >= 1000 ? `${(val/1000).toFixed(1)}k` : val}
-                />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#161e2a', border: '1px solid #1f2d3d', borderRadius: '8px' }}
-                  itemStyle={{ fontSize: '12px', fontFamily: 'JetBrains Mono' }}
-                  cursor={{ fill: 'rgba(245, 158, 11, 0.05)' }}
-                />
-                <Bar dataKey="poly" radius={[4, 4, 0, 0]}>
-                  {stats.buyerChartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+    <div className="flex flex-col gap-6 min-h-[900px] mb-12">
+      {/* 1. Header & Quick Toggles */}
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 no-print px-1">
+        <div className="flex items-center gap-4">
+           <div className="w-10 h-10 bg-accent/20 rounded-xl flex items-center justify-center border border-accent/20 shadow-lg shadow-accent/5">
+              <LayoutDashboard size={20} className="text-accent" />
+           </div>
+           <div>
+              <h2 className="st leading-none">Dashboard</h2>
+              <div className="flex items-center gap-2 mt-1">
+                 <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                 <p className="sst leading-none">Command Intelligence Matrix</p>
+              </div>
+           </div>
         </div>
 
-        {/* Daily Production Trend */}
-        <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-[11px] font-bold text-fg uppercase tracking-widest flex items-center gap-2">
-              <Activity size={14} className="text-info" />
-              Daily Production Trend <span className="fb ml-1">GROUP BY</span>
-            </h3>
-          </div>
-          <div className="h-[280px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={stats.trendChartData}>
-                <defs>
-                  <linearGradient id="colorPoly" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2d3d" vertical={false} />
-                <XAxis 
-                  dataKey="displayDate" 
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                />
-                <YAxis 
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#161e2a', border: '1px solid #1f2d3d', borderRadius: '8px' }}
-                  itemStyle={{ fontSize: '12px', fontFamily: 'JetBrains Mono' }}
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey="poly" 
-                  stroke="#06b6d4" 
-                  strokeWidth={3}
-                  fillOpacity={1} 
-                  fill="url(#colorPoly)" 
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+        <div className="flex items-center gap-3 bg-bg2/40 p-1 rounded-xl border border-border shadow-2xl">
+           <div className="px-3 border-r border-border/50">
+              <span className="text-[9px] font-black uppercase text-muted tracking-widest">Layout</span>
+           </div>
+           <div className="flex items-center gap-1 pr-2 border-r border-border mr-1">
+             {(Object.keys(visibleBlocks) as Array<keyof typeof visibleBlocks>).map(key => (
+               <button 
+                 key={key}
+                 onClick={() => setVisibleBlocks(prev => ({ ...prev, [key]: !prev[key] }))}
+                 className={cn(
+                   "w-8 h-8 rounded-lg transition-all active:scale-95 flex items-center justify-center",
+                   visibleBlocks[key] ? "bg-accent/10 text-accent border border-accent/30 shadow-lg" : "text-muted hover:bg-white/5 border border-transparent"
+                 )}
+                 title={`Toggle ${String(key)}`}
+               >
+                  {key === 'overview' && <Activity size={14} />}
+                  {key === 'gaugeMeter' && <Zap size={14} />}
+                  {key === 'productionTrend' && <TrendingUp size={14} />}
+                  {key === 'buyerAnalytics' && <Users size={14} />}
+                  {key === 'recentStatus' && <ClipboardList size={14} />}
+                  {key === 'achievement' && <CheckCircle2 size={14} />}
+               </button>
+             ))}
+           </div>
+           <div className="flex items-center gap-1">
+             <button onClick={resetLayout} className="p-2 text-muted hover:text-white transition-colors" title="Reset Layout">
+                <RotateCcw size={14} />
+             </button>
+             <button 
+               onClick={saveLayout} 
+               disabled={saveStatus === 'saving'}
+               className={cn("flex items-center gap-2 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all", saveStatus === 'saved' ? "bg-success text-white" : "bg-accent/10 text-accent hover:bg-accent/20")}
+             >
+                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? <><CheckCircle2 size={12}/> Saved</> : <><Save size={12}/> Save</>}
+             </button>
+           </div>
         </div>
+      </header>
 
-        {/* Operation-wise Output */}
-        <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-[11px] font-bold text-fg uppercase tracking-widest flex items-center gap-2">
-              <Users size={14} className="text-teal" />
-              Operation-wise Output <span className="fb ml-1">SUM</span>
-            </h3>
+      {/* 2. Global Filter Bar (Analytics Style) */}
+      <section className="bg-bg2/30 backdrop-blur-md border border-white/5 rounded-3xl p-5 shadow-2xl relative overflow-hidden group no-print ring-1 ring-white/5">
+          <div className="absolute top-0 right-0 p-8 opacity-5">
+             <Filter size={60} className="text-accent" />
           </div>
-          <div className="h-[280px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={stats.opChartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {stats.opChartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#161e2a', border: '1px solid #1f2d3d', borderRadius: '8px' }}
-                  itemStyle={{ fontSize: '12px', fontFamily: 'JetBrains Mono' }}
-                />
-                <Legend 
-                  verticalAlign="bottom" 
-                  height={36} 
-                  iconType="circle"
-                  formatter={(value) => <span className="text-[10px] text-muted uppercase font-bold">{value}</span>}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Achievement by Buyer */}
-        <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-[11px] font-bold text-fg uppercase tracking-widest flex items-center gap-2">
-              <Target size={14} className="text-danger" />
-              Achievement by Buyer <span className="fb ml-1">%</span>
-            </h3>
-          </div>
-          <div className="h-[280px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.buyerChartData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2d3d" horizontal={false} />
-                <XAxis 
-                  type="number" 
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                  domain={[0, 100]}
-                />
-                <YAxis 
-                  dataKey="name" 
-                  type="category"
-                  stroke="#64748b" 
-                  fontSize={10} 
-                  tickLine={false} 
-                  axisLine={false}
-                  width={80}
-                />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#161e2a', border: '1px solid #1f2d3d', borderRadius: '8px' }}
-                  itemStyle={{ fontSize: '12px', fontFamily: 'JetBrains Mono' }}
-                  formatter={(value) => [`${value}%`, 'Achievement']}
-                />
-                <Bar dataKey="ach" radius={[0, 4, 4, 0]}>
-                  {stats.buyerChartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.ach >= 80 ? '#10b981' : entry.ach >= 50 ? '#f59e0b' : '#ef4444'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Daily Production Summary */}
-      <div className="bg-card border border-border rounded-xl p-5 shadow-xl">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-          <div>
-            <h3 className="text-sm font-bold flex items-center gap-2">
-              <Calendar size={18} className="text-accent" />
-              Daily Production Summary
-            </h3>
-            <p className="text-[10px] text-muted">Total output overview for a specific day</p>
-          </div>
-          <div className="flex items-center gap-2 bg-bg2/50 p-1 rounded-lg border border-border">
-            <span className="text-[10px] font-bold text-muted uppercase px-2">Select Date:</span>
-            <input 
-              type="date" 
-              value={selectedDate} 
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="fi h-8 text-[11px] w-[140px] bg-card border-none"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: 'Today Cut', value: dailySummary.cut, icon: Scissors, color: 'accent' },
-            { label: 'Today Sew Out', value: dailySummary.sewOut, icon: Shirt, color: 'teal' },
-            { label: 'Today Poly', value: dailySummary.poly, icon: BoxIcon, color: 'info' },
-            { label: 'Today Shipment', value: dailySummary.shipment, icon: Activity, color: 'success' },
-          ].map((item, i) => (
-            <div key={i} className="bg-bg2/30 border border-border rounded-lg p-4 flex flex-col justify-between group hover:bg-bg2/50 transition-colors">
-              <div className="flex items-center justify-between mb-3">
-                <div className={cn(
-                  "p-1.5 rounded-md",
-                  item.color === 'accent' && "bg-accent/10 text-accent",
-                  item.color === 'teal' && "bg-teal/10 text-teal",
-                  item.color === 'info' && "bg-info/10 text-info",
-                  item.color === 'success' && "bg-success/10 text-success"
-                )}>
-                  <item.icon size={14} />
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 relative z-10">
+             <div className="space-y-1.5 font-mono">
+                <label className="text-[8px] font-black text-muted uppercase tracking-[0.3em] ml-1">Period Alpha</label>
+                <div className="relative group/input">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-accent/50 group-hover/input:text-accent transition-colors" size={12} />
+                  <input 
+                    type="date" 
+                    className="fi pl-10 h-9 bg-transparent border-white/10" 
+                    value={dateRange.start} 
+                    onChange={(e) => setDateRange({...dateRange, start: e.target.value})} 
+                  />
                 </div>
-                <ChevronRight size={12} className="text-muted/30 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-muted uppercase tracking-tight block mb-1">{item.label}</span>
-                <span className={cn(
-                  "text-xl font-black num",
-                  item.value > 0 ? "text-fg" : "text-muted/30"
-                )}>
-                  {item.value.toLocaleString()}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+             </div>
+             <div className="space-y-1.5 font-mono">
+                <label className="text-[8px] font-black text-muted uppercase tracking-[0.3em] ml-1">Period Omega</label>
+                <div className="relative group/input">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-accent/50 group-hover/input:text-accent transition-colors" size={12} />
+                  <input 
+                    type="date" 
+                    className="fi pl-10 h-9 bg-transparent border-white/10" 
+                    value={dateRange.end} 
+                    onChange={(e) => setDateRange({...dateRange, end: e.target.value})} 
+                  />
+                </div>
+             </div>
+             <div className="space-y-1.5 font-mono">
+                <label className="text-[8px] font-black text-muted uppercase tracking-[0.3em] ml-1">Style Vector</label>
+                <div className="relative group/input">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-accent/50 group-hover/input:text-accent transition-colors" size={12} />
+                  <input 
+                    type="text" 
+                    placeholder="Vector Style ID..."
+                    className="fi pl-10 h-9 bg-transparent border-white/10" 
+                    value={searchStyle} 
+                    onChange={(e) => setSearchStyle(e.target.value)} 
+                  />
+                </div>
+             </div>
+             <div className="space-y-1.5 font-mono">
+                <label className="text-[8px] font-black text-muted uppercase tracking-[0.3em] ml-1">Buyer Entity</label>
+                <div className="relative group/input">
+                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-accent/50 group-hover/input:text-accent transition-colors" size={12} />
+                  <input 
+                    type="text" 
+                    placeholder="Analyze Buyer..."
+                    className="fi pl-10 h-9 bg-transparent border-white/10" 
+                    value={searchBuyer} 
+                    onChange={(e) => setSearchBuyer(e.target.value)} 
+                  />
+                </div>
+             </div>
+          </div>
+      </section>
+
+      {/* 3. Main Dashboard Bento Grid */}
+      <div className="grid grid-cols-12 gap-6">
+        
+        {/* Speedometer Gauge (Visual KPI) */}
+        <AnimatePresence>
+          {visibleBlocks.gaugeMeter && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="col-span-12 lg:col-span-4 bg-bg2/40 border border-border rounded-3xl p-6 flex flex-col items-center justify-center relative overflow-hidden group shadow-xl"
+            >
+               <h3 className="sst mb-6 tracking-[0.4em]">Efficiency Pulse</h3>
+               <Gauge value={stats.overallAch} max={100} label="Production Velocity" />
+               <div className="mt-8 grid grid-cols-2 gap-4 w-full border-t border-border/50 pt-6">
+                  <div className="text-center">
+                     <span className="block text-[8px] font-black uppercase text-muted tracking-widest mb-1">Target</span>
+                     <span className="text-xl font-black text-white">{stats.totalOrderQty.toLocaleString()}</span>
+                  </div>
+                  <div className="text-center border-l border-border/50">
+                     <span className="block text-[8px] font-black uppercase text-muted tracking-widest mb-1">Output</span>
+                     <span className="text-xl font-black text-accent">{stats.totalPoly.toLocaleString()}</span>
+                  </div>
+               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Statistical Overview Bento Cards */}
+        <AnimatePresence>
+          {visibleBlocks.overview && (
+            <motion.div 
+              initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
+              className="col-span-12 lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4"
+            >
+              {[
+                { label: 'Total Cutting', val: stats.totalCut, icon: Scissors, color: 'text-indigo-400', bg: 'bg-indigo-400/10' },
+                { label: 'Sewing Output', val: stats.totalSewOut, icon: Shirt, color: 'text-accent', bg: 'bg-accent/10' },
+                { label: 'Finishing Output', val: stats.totalPoly, icon: BoxIcon, color: 'text-teal-400', bg: 'bg-teal-400/10' },
+                { label: 'Shipment Total', val: stats.totalShipment, icon: Target, color: 'text-rose-400', bg: 'bg-rose-400/10' }
+              ].map((card, i) => (
+                <div key={i} className="bg-bg2/40 border border-border rounded-3xl p-6 hover:bg-bg2 transition-all flex items-center gap-6 group shadow-lg">
+                   <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 border border-transparent group-hover:border-white/10 transition-all shadow-md", card.bg)}>
+                      <card.icon size={24} className={card.color} />
+                   </div>
+                   <div className="overflow-hidden">
+                      <span className="block text-[9px] font-black uppercase tracking-widest text-muted mb-1 truncate">{card.label}</span>
+                      <span className="text-2xl font-black text-white num tracking-tighter leading-none block">{card.val.toLocaleString()}</span>
+                   </div>
+                </div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Production Trend Area Chart */}
+        <AnimatePresence>
+          {visibleBlocks.productionTrend && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+              className="col-span-12 lg:col-span-7 bg-bg2/40 border border-border rounded-3xl p-8 min-h-[400px] flex flex-col shadow-xl"
+            >
+               <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-3">
+                     <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
+                        <Activity size={16} className="text-indigo-400" />
+                     </div>
+                     <h3 className="sst">Daily Output Radar</h3>
+                  </div>
+                  <div className="flex items-center gap-4 text-[8px] font-black uppercase tracking-widest">
+                     <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-indigo-500" /> Cut</div>
+                     <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-accent" /> Poly</div>
+                  </div>
+               </div>
+               
+               <div className="flex-1 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={stats.trend}>
+                      <defs>
+                        <linearGradient id="colorCut" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorPoly" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
+                      <XAxis dataKey="date" stroke="#64748b" fontSize={9} tickLine={false} axisLine={false} dy={10} />
+                      <YAxis stroke="#64748b" fontSize={9} tickLine={false} axisLine={false} tickFormatter={(v) => v.toLocaleString()} />
+                      <Tooltip 
+                        contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', fontSize: '10px' }}
+                      />
+                      <Area type="monotone" dataKey="cut" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorCut)" />
+                      <Area type="monotone" dataKey="poly" stroke="#f59e0b" strokeWidth={3} fillOpacity={1} fill="url(#colorPoly)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Buyer Distribution Analytics */}
+        <AnimatePresence>
+          {visibleBlocks.buyerAnalytics && (
+             <motion.div 
+               initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+               className="col-span-12 lg:col-span-5 bg-bg2/40 border border-border rounded-3xl p-8 flex flex-col shadow-xl"
+             >
+                <div className="flex items-center gap-3 mb-8">
+                   <div className="w-8 h-8 rounded-lg bg-teal-500/10 flex items-center justify-center border border-teal-500/20">
+                      <Users size={16} className="text-teal-400" />
+                   </div>
+                   <h3 className="sst">Buyer Intelligence</h3>
+                </div>
+                <div className="flex-1 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={stats.buyerChartData} layout="vertical" margin={{ left: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#1e293b" />
+                      <XAxis type="number" hide />
+                      <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={9} width={80} />
+                      <Tooltip 
+                        cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                        contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', fontSize: '10px' }}
+                      />
+                      <Bar dataKey="Order" fill="#334155" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="Production" fill="#14b8a6" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Top Order Achievements List */}
+        <AnimatePresence>
+          {visibleBlocks.recentStatus && (
+             <motion.div 
+               initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
+               className="col-span-12 lg:col-span-6 bg-bg2/40 border border-border rounded-3xl p-8 flex flex-col shadow-xl relative overflow-hidden"
+             >
+                <h3 className="sst mb-8">Top Performers</h3>
+                <div className="space-y-5 flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                   {stats.topPerformers.map((o, i) => (
+                      <div key={i} className="flex flex-col gap-2">
+                         <div className="flex items-center justify-between">
+                            <div className="flex flex-col">
+                               <span className="text-[10px] font-black text-white uppercase tracking-wider">{o.poNo}</span>
+                               <span className="text-[8px] font-bold text-muted uppercase tracking-widest">{o.buyer}</span>
+                            </div>
+                            <span className="text-sm font-black text-accent num">{o.ach}%</span>
+                         </div>
+                         <div className="w-full h-1.5 bg-bg border border-border/30 rounded-full overflow-hidden">
+                            <motion.div 
+                               initial={{ width: 0 }} 
+                               animate={{ width: `${Math.min(o.ach, 100)}%` }}
+                               transition={{ duration: 1, delay: i * 0.1 }}
+                               className="h-full bg-accent rounded-full"
+                            />
+                         </div>
+                      </div>
+                   ))}
+                </div>
+             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Achievement Roadmap */}
+        <AnimatePresence>
+          {visibleBlocks.achievement && (
+            <motion.div 
+              initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
+              className="col-span-12 lg:col-span-6 bg-bg2/40 border border-border rounded-3xl p-8 flex flex-col shadow-xl"
+            >
+               <h3 className="sst mb-8">Milestone Tracking</h3>
+               <div className="grid grid-cols-2 gap-6 h-full items-center">
+                  <div className="space-y-6">
+                     <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-1">
+                        <span className="text-[8px] font-black uppercase text-muted tracking-widest">Global Order Target</span>
+                        <div className="text-xl font-black text-fg num">{stats.totalOrderQty.toLocaleString()}</div>
+                     </div>
+                     <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-1">
+                        <span className="text-[8px] font-black uppercase text-muted tracking-widest">Realized Output</span>
+                        <div className="text-xl font-black text-accent num">{stats.totalPoly.toLocaleString()}</div>
+                     </div>
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <div className="relative w-32 h-32">
+                       <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+                         <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" className="text-white/5" />
+                         <motion.circle 
+                           cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" strokeDasharray="282.7" 
+                           animate={{ strokeDashoffset: 282.7 - (282.7 * (stats.overallAch / 100)) }}
+                           className="text-accent"
+                         />
+                       </svg>
+                       <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-2xl font-black text-white leading-none num">{stats.overallAch}%</span>
+                          <span className="text-[7px] text-muted font-bold uppercase tracking-widest mt-1">Velocity</span>
+                       </div>
+                    </div>
+                  </div>
+               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
+
+      {/* Persistent Summary Footer */}
+      <footer className="mt-auto bg-bg2/50 backdrop-blur-xl rounded-3xl border border-border p-6 flex flex-col md:flex-row items-center justify-between gap-6 no-print shadow-xl">
+         <div className="flex items-center gap-6">
+            <div className="w-12 h-12 bg-accent rounded-2xl flex items-center justify-center border-2 border-bg shadow-lg">
+               <Target size={24} className="text-slate-950" />
+            </div>
+            <div className="flex flex-col">
+               <h4 className="sst mb-1">Global Velocity</h4>
+               <div className="flex items-center gap-4">
+                  <span className="text-2xl font-black text-white leading-none num">{stats.overallAch}%</span>
+                  <div className="w-32 h-2 bg-bg border border-border/50 rounded-full overflow-hidden">
+                     <motion.div 
+                        initial={{ width: 0 }} animate={{ width: `${Math.min(stats.overallAch, 100)}%` }}
+                        className="h-full bg-accent rounded-full"
+                     />
+                  </div>
+               </div>
+            </div>
+         </div>
+
+         <div className="flex gap-8">
+            <div className="text-right">
+               <span className="block sst mb-1">Styles</span>
+               <span className="text-xl font-black text-white num leading-none">{orders.length}</span>
+            </div>
+            <div className="text-right border-l border-border/50 pl-8">
+               <span className="block sst mb-1">Efficiency</span>
+               <span className="text-xl font-black text-accent num leading-none">{stats.totalPoly ? Math.round((stats.totalPoly / stats.totalCut) * 100) : 0}%</span>
+            </div>
+         </div>
+      </footer>
     </div>
   );
-}
+});

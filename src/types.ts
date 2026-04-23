@@ -80,3 +80,12 @@ export interface FinishingTrackingEntry {
   createdAt: string;
   userId: string;
 }
+
+export interface ExcelFile {
+  id: string;
+  fileName: string;
+  uploadedAt: string;
+  uploadedBy: string;
+  rowCount: number;
+  content: string; // JSON stringified array of objects
+}

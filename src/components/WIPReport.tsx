@@ -13,10 +13,11 @@ interface WIPReportProps {
   poAggregates?: Record<string, any>;
 }
 
-export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {} }: WIPReportProps) {
+export default React.memo(function WIPReport({ orders, entries, getPOInfo, poAggregates = {} }: WIPReportProps) {
   const [search, setSearch] = useState('');
   const [historyPO, setHistoryPO] = useState<string | null>(null);
   const [selectedError, setSelectedError] = useState<string[] | null>(null);
+  const [displayLimit, setDisplayLimit] = useState(200);
 
   const summaries = useMemo(() => {
     if (!historyPO) return { lines: [], floors: [] };
@@ -134,8 +135,19 @@ export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {
       };
     }).filter((r): r is NonNullable<typeof r> => r !== null);
 
-    return rows.sort((a, b) => a.buyer.localeCompare(b.buyer) || a.poNo.localeCompare(b.poNo));
-  }, [entries, getPOInfo]);
+    // Hierarchical Sorting (Buyer > Style > PO > Color)
+    return rows.sort((a, b) => {
+      const buyerCmp = (a.buyer || '').localeCompare(b.buyer || '');
+      if (buyerCmp !== 0) return buyerCmp;
+      const styleCmp = (a.style || '').localeCompare(b.style || '');
+      if (styleCmp !== 0) return styleCmp;
+      return (a.poNo || '').localeCompare(b.poNo || '');
+    });
+  }, [entries, getPOInfo, search, poAggregates]);
+
+  const displayedWipData = useMemo(() => {
+    return wipData.slice(0, displayLimit);
+  }, [wipData, displayLimit]);
 
   const handleDownload = () => {
     const header = [
@@ -177,32 +189,49 @@ export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4 no-print">
+    <div className="space-y-4">
+      {/* Search & Actions Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 no-print">
         <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <BarChart3 size={20} className="text-accent" />
-            Production WIP & Risk Analysis
+          <h2 className="text-xl font-black flex items-center gap-2">
+            <BarChart3 size={24} className="text-accent" />
+            WIP & Risk Intelligence
           </h2>
-          <p className="text-[11px] text-muted">PO-wise aggregated Work-in-Progress status and shipment risk assessment</p>
+          <p className="text-[10px] text-muted uppercase tracking-[0.2em] font-medium">Global Work-in-Progress & Risk Flow</p>
         </div>
-        <div className="flex items-center gap-2 flex-1 md:flex-none min-w-[300px]">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
-            <input
-              type="text"
-              placeholder="Search PO, Buyer, Style, Line or Floor..."
-              className="fi pl-10 h-10 rounded-xl"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+
+        <div className="flex items-center gap-2">
+          {/* Floating Search Bar */}
+          <div className="relative group">
+            <div className={cn(
+              "absolute inset-0 bg-accent/20 blur-xl rounded-full transition-opacity duration-500 opacity-0 group-focus-within:opacity-100"
+            )} />
+            <div className="relative flex items-center bg-transparent backdrop-blur-md border border-white/5 rounded-full p-1.5 ring-1 ring-white/5 shadow-2xl">
+              <div className="flex items-center pl-3 pr-2 text-muted">
+                <Search size={14} />
+              </div>
+              <input
+                type="text"
+                placeholder="Analyze PO, Buyer, Style..."
+                className="bg-transparent border-none focus:outline-none focus:ring-0 text-xs w-32 sm:w-48 lg:w-60 placeholder:text-muted/50"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <button 
+                onClick={handleDownload}
+                className="p-2 mr-1 rounded-full hover:bg-white/5 text-muted hover:text-fg transition-all"
+                title="Export Intelligence Data"
+              >
+                <Download size={14} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="bg-bg2/50 backdrop-blur-xl border border-border rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/5">
-        <div className="overflow-x-auto max-h-[75vh] no-scrollbar">
-          <table className="et text-[11px]">
+        <div className="overflow-x-auto max-h-[75vh] custom-scrollbar">
+          <table className="et text-[11px] min-w-[1200px] sm:min-w-full">
             <thead>
               <tr>
                 <th className="w-8">#</th>
@@ -232,7 +261,7 @@ export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {
               </tr>
             </thead>
             <tbody>
-              {wipData.map((r, i) => (
+              {displayedWipData.map((r, i) => (
                 <tr key={r.poNo}>
                   <td className="num text-muted/50">{i + 1}</td>
                   <td className="text-left font-black text-fg">{r.buyer}</td>
@@ -270,6 +299,18 @@ export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {
                   </td>
                 </tr>
               ))}
+              {wipData.length > displayLimit && (
+                <tr>
+                   <td colSpan={24} className="p-8 text-center bg-bg/20">
+                      <button 
+                         onClick={() => setDisplayLimit(prev => prev + 300)}
+                         className="px-10 py-3 bg-accent/10 border border-accent/20 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-accent hover:bg-accent hover:text-white transition-all shadow-xl"
+                      >
+                         Load Remaining WIP Nodes ({wipData.length - displayLimit} Pending)
+                      </button>
+                   </td>
+                </tr>
+              )}
               {wipData.length > 0 && (
                 <tr className="bg-accent/10 font-black border-t-2 border-accent/20 text-accent">
                   <td colSpan={7} className="text-right uppercase tracking-[0.2em] text-[10px] pr-6 py-4">Total WIP Summary</td>
@@ -538,4 +579,4 @@ export default function WIPReport({ orders, entries, getPOInfo, poAggregates = {
       </AnimatePresence>
     </div>
   );
-}
+});
