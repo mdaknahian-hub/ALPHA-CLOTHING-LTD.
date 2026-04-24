@@ -1073,7 +1073,7 @@ function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalPro
     const lines = rawText.split('\n').filter(l => l.trim());
     if (lines.length === 0) return;
 
-    const results: (Omit<Order, 'id'> & { error?: string })[] = [];
+    const results: (Omit<Order, 'id'> & { error?: string; isDuplicate?: boolean })[] = [];
     const errs: string[] = [];
     
     if (!buyer) {

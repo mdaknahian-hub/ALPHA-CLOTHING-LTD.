@@ -22,7 +22,7 @@ import { motion } from 'motion/react';
 import { cn, safeFormat } from '../lib/utils';
 import { Order, ProductionEntry } from '../types';
 import { format, parseISO, differenceInDays, subDays, isAfter } from 'date-fns';
-import { db, addAuditLog } from '../firebase';
+import { db, addAuditLog, auth } from '../firebase';
 import { collection, getDocs, writeBatch, doc } from 'firebase/firestore';
 
 interface SystemHealthProps {
@@ -90,14 +90,20 @@ export default function SystemHealth({ orders, entries }: SystemHealthProps) {
 
     if (!confirmation) return;
 
-    const secondCheck = window.prompt("To confirm, please type 'WIPE ALL DATA' exactly:");
-    if (secondCheck !== 'WIPE ALL DATA') {
+    const secondCheck = window.prompt("To confirm, please type 'WIPE ALL DATA' exactly (case-insensitive):");
+    if (!secondCheck || secondCheck.trim().toUpperCase() !== 'WIPE ALL DATA') {
       alert("Reset cancelled. Confirmation phrase did not match.");
       return;
     }
 
+    if (auth.currentUser?.email?.toLowerCase() !== 'aknahian@gmail.com') {
+      alert("Unauthorized. Only the Super Administrator can perform this action.");
+      return;
+    }
+
     setIsResetting(true);
-    setResetStatus("Initializing wipe sequence...");
+    setResetStatus("Initializing wipe...");
+    console.log("Admin identity confirmed for wipe:", auth.currentUser?.email);
 
     try {
       const collectionsToWipe = [
@@ -109,51 +115,56 @@ export default function SystemHealth({ orders, entries }: SystemHealthProps) {
         'dashboard_configs'
       ];
 
-      console.log("Starting Master Wipe for collections:", collectionsToWipe);
-
+      let totalDeleted = 0;
       for (const collName of collectionsToWipe) {
         try {
           setResetStatus(`Wiping ${collName.replace(/_/g, ' ')}...`);
-          console.log(`Processing collection: ${collName}`);
-          
           const snapshot = await getDocs(collection(db, collName));
-          console.log(`Found ${snapshot.size} documents in ${collName}`);
           
-          if (snapshot.empty) continue;
-
-          const docs = snapshot.docs;
-          for (let i = 0; i < docs.length; i += 500) {
-            const chunk = docs.slice(i, i + 500);
-            const batch = writeBatch(db);
-            chunk.forEach(d => batch.delete(d.ref));
-            await batch.commit();
-            console.log(`Committed batch of ${chunk.length} for ${collName}`);
+          if (!snapshot.empty) {
+            const docs = snapshot.docs;
+            console.log(`Wiping ${docs.length} documents from ${collName}`);
+            // Process in chunks of 500 (Firestore batch limit)
+            for (let i = 0; i < docs.length; i += 500) {
+              const chunk = docs.slice(i, i + 500);
+              const batch = writeBatch(db);
+              chunk.forEach(d => {
+                batch.delete(d.ref);
+                totalDeleted++;
+              });
+              await batch.commit();
+            }
           }
-        } catch (collectionErr: any) {
-          console.error(`Error wiping collection ${collName}:`, collectionErr);
-          // Don't swallow critical errors, but allow continuing if it's just one collection failing
-          if (collectionErr.code === 'permission-denied') {
-            console.warn(`Permission denied for ${collName}, skipping...`);
+        } catch (colErr: any) {
+          console.error(`Error wiping ${collName}:`, colErr);
+          // Alert specifically for permission issues
+          if (colErr.code === 'permission-denied') {
+            alert(`Permission Denied: System cannot delete data from '${collName}'. Please verify admin rules.`);
           } else {
-            throw collectionErr;
+            alert(`Error wiping '${collName}': ${colErr.message}`);
           }
+          // Continue to next collection if possible
         }
       }
 
-      await addAuditLog('DELETE', 'SETTINGS', 'Super Admin performed a Master System Wipe', '/settings/health');
-      setResetStatus("DATABASE PURGED.");
-      console.log("Master Wipe Complete.");
-      
-      alert("Database purged successfully. The application will now reload.");
+      setResetStatus("Finalizing...");
+      try {
+        await addAuditLog('DELETE', 'SETTINGS', 'Super Admin performed a Master System Wipe', '/settings/health');
+      } catch (logErr) {
+        console.warn("Audit log failed during wipe, continuing reload.");
+      }
+
+      setResetStatus("SUCCESS.");
+      alert(`Wipe Complete. Successfully deleted ${totalDeleted} documents. The system will now reload.`);
       
       setTimeout(() => {
         setIsResetting(false);
         setResetStatus(null);
         window.location.reload();
-      }, 1000);
+      }, 500);
     } catch (err: any) {
-      console.error("Master Reset Total Failure:", err);
-      alert(`Master Reset Failed: ${err.message || 'Unknown error'}. Check console for details.`);
+      console.error("Master reset error:", err);
+      alert(`Master reset failed: ${err.message || 'Unknown error'}`);
       setIsResetting(false);
       setResetStatus(null);
     }
