@@ -38,7 +38,8 @@ import {
   ArrowRight,
   Save,
   RotateCcw,
-  Zap
+  Zap,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, safeFormat } from '../lib/utils';
@@ -78,7 +79,8 @@ export default React.memo(function Dashboard({ orders, entries, getPOInfo, poCol
     productionTrend: true,
     buyerAnalytics: true,
     recentStatus: true,
-    gaugeMeter: true
+    gaugeMeter: true,
+    aiInsights: true
   });
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -124,7 +126,8 @@ export default React.memo(function Dashboard({ orders, entries, getPOInfo, poCol
       productionTrend: true,
       buyerAnalytics: true,
       recentStatus: true,
-      gaugeMeter: true
+      gaugeMeter: true,
+      aiInsights: true
     });
   };
 
@@ -280,7 +283,7 @@ export default React.memo(function Dashboard({ orders, entries, getPOInfo, poCol
                disabled={saveStatus === 'saving'}
                className={cn("flex items-center gap-2 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all", saveStatus === 'saved' ? "bg-success text-white" : "bg-accent/10 text-accent hover:bg-accent/20")}
              >
-                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? <><CheckCircle2 size={12}/> Saved</> : <><Save size={12}/> Save</>}
+                {saveStatus === 'saving' ? <><Loader2 size={12} className="animate-spin" /> Saving...</> : saveStatus === 'saved' ? <><CheckCircle2 size={12}/> Saved</> : <><Save size={12}/> Save</>}
              </button>
            </div>
         </div>
@@ -349,7 +352,66 @@ export default React.memo(function Dashboard({ orders, entries, getPOInfo, poCol
       {/* 3. Main Dashboard Bento Grid */}
       <div className="grid grid-cols-12 gap-6">
         
-        {/* Speedometer Gauge (Visual KPI) */}
+        {/* AI Insight Pulse */}
+        <AnimatePresence>
+          {visibleBlocks.aiInsights && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+              className="col-span-12 bg-gradient-to-br from-indigo-500/5 to-accent/5 border border-border/50 rounded-[40px] p-8 shadow-2xl relative overflow-hidden group"
+            >
+               <div className="absolute top-0 right-0 w-64 h-64 bg-accent/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
+               
+               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+                  <div className="flex items-center gap-4">
+                     <div className="w-16 h-16 rounded-3xl bg-accent/10 border border-accent/20 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                        <Zap size={32} className="text-accent animate-pulse" />
+                     </div>
+                     <div>
+                        <h3 className="text-2xl font-black uppercase tracking-tighter text-white">Advanced AI Intelligence</h3>
+                        <p className="text-xs text-muted font-bold uppercase tracking-widest mt-1">Real-time Production Analysis Engine</p>
+                     </div>
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-2">
+                     <button 
+                        onClick={() => {
+                          const event = new CustomEvent('ai-trigger', { detail: { prompt: "আজকের প্রোডাকশন ডাটার সামারি দিন এবং ৩টি গুরুত্বপূর্ণ পয়েন্ট হাইলাইট করুন।" } });
+                          window.dispatchEvent(event);
+                        }}
+                        className="bg-accent text-slate-950 px-8 py-3.5 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-white hover:shadow-xl transition-all flex items-center gap-2 group/btn"
+                     >
+                        <Activity size={14} className="group-hover/btn:rotate-12 transition-transform" />
+                        Generate Bengali Summary
+                     </button>
+                     <button 
+                        onClick={() => {
+                          const event = new CustomEvent('ai-trigger', { detail: { prompt: "Analyze efficiency and identify bottlenecks." } });
+                          window.dispatchEvent(event);
+                        }}
+                        className="bg-bg border border-border text-white px-8 py-3.5 font-black uppercase tracking-widest text-[10px] rounded-2xl hover:bg-border transition-all flex items-center gap-2"
+                     >
+                        <TrendingUp size={14} />
+                        Efficiency Check
+                     </button>
+                  </div>
+               </div>
+
+               <div className="mt-8 flex flex-wrap gap-12 border-t border-border/20 pt-8">
+                  {[
+                    { label: 'Current WIP', val: (stats.totalCut - stats.totalPoly).toLocaleString(), desc: 'Unfinished Inventory' },
+                    { label: 'Order Variance', val: (stats.overallAch >= 100 ? 'Target Met' : `${Math.round(100 - stats.overallAch)}% Behind`), desc: 'Performance Delta' },
+                    { label: 'Growth Scale', val: `${Math.round(stats.totalOrderQty / 1000)}k+`, desc: 'Total Managed Units' }
+                  ].map((stat, idx) => (
+                    <div key={idx} className="flex flex-col">
+                       <span className="text-[10px] font-black text-muted uppercase tracking-[0.2em] mb-1">{stat.label}</span>
+                       <span className="text-2xl font-black text-white num leading-none mb-1">{stat.val}</span>
+                       <span className="text-[9px] font-bold text-accent/60 uppercase tracking-widest">{stat.desc}</span>
+                    </div>
+                  ))}
+               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AnimatePresence>
           {visibleBlocks.gaugeMeter && (
             <motion.div 

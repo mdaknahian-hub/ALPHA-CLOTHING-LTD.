@@ -52,7 +52,6 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
       finOut: 0,
       poly: 0,
       shipment: 0,
-      lineNo: '',
       floor: ''
     };
   });
@@ -176,7 +175,6 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
       finOut: 0,
       poly: 0,
       shipment: 0,
-      lineNo: '',
       floor: ''
     });
     setEditingEntryId(null);
@@ -196,7 +194,6 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
       finOut: entry.finOut || 0,
       poly: entry.poly || 0,
       shipment: entry.shipment || 0,
-      lineNo: entry.lineNo || '',
       floor: entry.floor || ''
     });
     setEditingEntryId(entry.id);
@@ -478,7 +475,6 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
                 <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Style Node</th>
                 <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Color Chromatics</th>
                 <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Floor Unit</th>
-                <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted text-left">Line Matrix</th>
                 
                 {/* Metrics */}
                 <th className="p-3 border-b border-border/20 text-[9px] font-black uppercase tracking-widest text-muted-foreground bg-white/3">CUT</th>
@@ -531,7 +527,6 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
                        </div>
                     </td>
                     <td className="p-3 text-[10px] font-black text-success/70 uppercase">{e.floor || '—'}</td>
-                    <td className="p-3 text-[10px] font-black text-accent/70 uppercase font-mono">{e.lineNo || '—'}</td>
                     
                     <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-60">{(e.cut || 0).toLocaleString()}</td>
                     <td className="p-3 num text-[11px] font-black bg-white/[0.01] opacity-60">{(e.sewOut || 0).toLocaleString()}</td>
@@ -816,14 +811,14 @@ export default React.memo(function DataEntry({ orders, entries, getPOInfo, addTo
                       </div>
                     ))}
                     <div className="flex flex-col gap-2">
-                        <label className="text-[9px] font-black uppercase tracking-widest ml-1 text-accent opacity-70">Node Line ID</label>
+                        <label className="text-[9px] font-black uppercase tracking-widest ml-1 text-accent opacity-70">Floor Unit</label>
                         <input 
                           type="text" 
-                          name="lineNo"
-                          value={formData.lineNo} 
+                          name="floor"
+                          value={formData.floor} 
                           onChange={handleInputChange} 
                           className="fi h-12 bg-bg text-center text-xs font-black rounded-2xl border-border/20 focus:ring-2 focus:ring-accent/20 transition-all font-mono"
-                          placeholder="LINE-00"
+                          placeholder="FLOOR-01"
                         />
                     </div>
                   </div>

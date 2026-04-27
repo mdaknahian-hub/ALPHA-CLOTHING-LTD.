@@ -1,14 +1,12 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-const genAI = new GoogleGenerativeAI((import.meta as any).env.VITE_GEMINI_API_KEY || '');
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function getSmartExcelMapping(headers: string[], targetKeys: string[]): Promise<Record<string, string>> {
-  if (!(import.meta as any).env.VITE_GEMINI_API_KEY) {
+  if (!process.env.GEMINI_API_KEY) {
     console.warn("Gemini API key missing, falling back to basic mapping.");
     return {};
   }
-
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   const prompt = `
     You are an expert production data analyst. I have an Excel file with the following headers:
@@ -28,7 +26,7 @@ export async function getSmartExcelMapping(headers: string[], targetKeys: string
     - 'finOut': Finishing output.
     - 'poly': Poly/Packing quantity.
     - 'shipment': Shipment quantity.
-    - 'lineNo': Production line number.
+    - 'floor': Production floor or line.
     - 'buyer': Buyer name.
     - 'style': Style name/ID.
     - 'orderQty': Total order quantity.
@@ -39,9 +37,14 @@ export async function getSmartExcelMapping(headers: string[], targetKeys: string
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: prompt,
+    });
+    
+    // @google/genai uses .text directly, not .text()
+    const text = response.text || '';
+    
     // Extract JSON if model wraps it in markdown
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {

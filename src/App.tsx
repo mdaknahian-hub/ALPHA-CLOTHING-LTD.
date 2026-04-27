@@ -1,56 +1,34 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
-  Scissors, 
-  RotateCcw, 
-  FileUp, 
-  FileDown,
   Database, 
   Keyboard, 
-  FileText, 
-  BarChart3, 
   LayoutDashboard,
-  Clock,
-  Activity,
   Plus,
-  ArrowRightLeft,
-  ArrowRight,
-  ArrowUp,
-  Trash2,
-  Pencil,
-  Filter,
   X,
-  Printer,
-  Info,
   CheckCircle2,
   AlertCircle,
   InfoIcon,
-  AlertTriangle,
-  Shirt,
-  CalendarDays,
-  Truck,
-  PieChart,
-  Waves,
-  FolderOpen,
   Library,
-  Box as BoxIcon,
   Target,
-  Shield,
   ShieldCheck,
-  ClipboardList,
-  Save,
-  Eraser,
-  Tag,
   Sun,
   Moon,
   Download,
   ChevronRight,
-  Sparkles,
-  FileSpreadsheet,
   Settings2,
-  RefreshCw
+  RefreshCw,
+  Bot,
+  FileText,
+  FileSpreadsheet,
+  Clock,
+  User,
+  Mail,
+  Phone,
+  Briefcase,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format, parseISO, isWithinInterval, startOfDay, endOfDay, differenceInCalendarDays } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { cn } from './lib/utils';
 import { Order, ProductionEntry, POInfo } from './types';
 import { DEFAULT_ORDERS, DEFAULT_ENTRIES, BUYERS } from './constants';
@@ -61,18 +39,13 @@ import { collection, onSnapshot, query, orderBy, doc, getDoc, setDoc } from 'fir
 // --- Components (Lazy Loaded) ---
 const OrderMaster = React.lazy(() => import('./components/OrderMaster'));
 const DataEntry = React.lazy(() => import('./components/DataEntry'));
-const DPRReport = React.lazy(() => import('./components/DPRReport'));
-const WIPReport = React.lazy(() => import('./components/WIPReport'));
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
-const StatusReport = React.lazy(() => import('./components/OrderStatus'));
 import SettingsModule from './components/SettingsModule';
 const SystemHealth = React.lazy(() => import('./components/SystemHealth'));
-const FinishingTracker = React.lazy(() => import('./components/FinishingTracker'));
-const ShipmentSchedule = React.lazy(() => import('./components/ShipmentSchedule'));
-const ReportBuilder = React.lazy(() => import('./components/ReportBuilder'));
 const AboutSection = React.lazy(() => import('./components/AboutSection'));
 const ExcelLibrary = React.lazy(() => import('./components/ExcelLibrary'));
 import Login from './components/Login';
+import { FloatingAgent } from './components/FloatingAgent';
 
 // --- Helper Components ---
 const DigitalClock = () => {
@@ -81,13 +54,17 @@ const DigitalClock = () => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+  
+  const dateStr = format(time, 'dd MMM yy, EEE');
+  const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
   return (
-    <div className="flex flex-col items-end">
-       <span className="text-[11px] font-black text-fg leading-none font-mono">
-         {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+    <div className="flex flex-col flex-1 leading-[1.2] items-start">
+       <span className="text-[11px] font-black text-slate-200 uppercase">
+         {dateStr}
        </span>
-       <span className="text-[8px] font-black text-muted uppercase tracking-[0.1em] mt-1">
-         {time.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
+       <span className="text-[10px] font-black text-amber-500 font-mono mt-0.5">
+         {timeStr}
        </span>
     </div>
   );
@@ -95,7 +72,8 @@ const DigitalClock = () => {
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<{ role: string; permissions?: string[]; status?: string } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ role: string; permissions?: string[]; status?: string; phone?: string; designation?: string; name?: string } | null>(null);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [entries, setEntries] = useState<ProductionEntry[]>([]);
 
@@ -435,12 +413,12 @@ export default function App() {
           o.orderQty.toLocaleString()
         ]);
       } else if (activeTab === 'entry') {
-        headers = ['DATE', 'PO NO', 'COLOR', 'LINE', 'CUT', 'SEW', 'WASH', 'FIN IN', 'FIN OUT', 'POLY', 'SHIP'];
+        headers = ['DATE', 'PO NO', 'COLOR', 'FLOOR', 'CUT', 'SEW', 'WASH', 'FIN IN', 'FIN OUT', 'POLY', 'SHIP'];
         body = sortedEntries.map(e => [
           e.date ? format(parseISO(e.date), 'dd-MMM-yy') : '—', 
           e.poNo, 
           e.color, 
-          e.lineNo || e.floor || 'N/A', 
+          e.floor || 'N/A', 
           e.cut || 0, 
           e.sewOut || 0, 
           e.washR || 0, 
@@ -582,13 +560,13 @@ export default function App() {
         });
       } else if (activeTab === 'entry') {
         sheetName = "Production Entries";
-        rows.push(['Date', 'PO No', 'Color', 'Line/Floor', 'Cut', 'Sew Out', 'Wash R', 'Fin In', 'Fin Out', 'Poly', 'Shipment']);
+        rows.push(['Date', 'PO No', 'Color', 'Floor', 'Cut', 'Sew Out', 'Wash R', 'Fin In', 'Fin Out', 'Poly', 'Shipment']);
         sortedEntries.forEach(e => {
           rows.push([
             e.date ? format(parseISO(e.date), 'dd-MMM-yy') : '—', 
             e.poNo, 
             e.color, 
-            e.lineNo || e.floor || 'N/A', 
+            e.floor || 'N/A', 
             e.cut, 
             e.sewOut, 
             e.washR, 
@@ -784,53 +762,49 @@ export default function App() {
   const navPosition = appSettings.navPosition || 'top';
 
   const navTabs = [
-    { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, perm: 'view-data', mobile: true },
-    { id: 'master', label: 'Orders', icon: Database, perm: 'view-data', mobile: true },
-    { id: 'ship-schedule', label: 'Schedule', icon: Truck, perm: 'view-data', mobile: true },
-    { id: 'entry', label: 'Entry', icon: Keyboard, perm: 'view-data', mobile: true },
-    { id: 'fin-track', label: 'Finishing', icon: Waves, perm: 'view-data' },
-    { id: 'custom-report', label: 'Analytics', icon: PieChart, perm: 'view-data' },
-    { id: 'status', label: 'Tracking', icon: Target, perm: 'view-data' },
-    { id: 'dpr', label: 'DPR', icon: ClipboardList, perm: 'view-data' },
-    { id: 'wip', label: 'WIP Audit', icon: Activity, perm: 'view-data' },
-    { id: 'lib', label: 'Library', icon: Library, perm: 'manage-orders', mobile: true },
-    { id: 'health', label: 'Health', icon: ShieldCheck, perm: 'view-data' },
-    { id: 'settings', label: 'Settings', icon: Settings2, mobile: true },
+    { id: 'dash', label: 'Dashboard', icon: LayoutDashboard, color: 'text-sky-500', perm: 'view-data', mobile: true },
+    { id: 'master', label: 'Orders', icon: Database, color: 'text-indigo-500', perm: 'view-data', mobile: true },
+    { id: 'entry', label: 'Entry', icon: Keyboard, color: 'text-emerald-500', perm: 'view-data', mobile: true },
+    { id: 'lib', label: 'Library', icon: Library, color: 'text-fuchsia-500', perm: 'manage-orders', mobile: true },
+    { id: 'health', label: 'Health', icon: ShieldCheck, color: 'text-rose-500', perm: 'view-data' },
+    { id: 'settings', label: 'Settings', icon: Settings2, color: 'text-slate-400', mobile: true },
   ];
 
   const filteredNavTabs = navTabs.filter(tab => !tab.perm || hasPermission(tab.perm));
   const mobileTabs = filteredNavTabs.filter(tab => tab.mobile);
 
   return (
-    <div className={cn(
-      "h-screen h-[100dvh] bg-bg text-fg font-sans selection:bg-accent selection:text-slate-950 flex flex-col md:flex-row overflow-hidden transition-all duration-500",
-    )}>
+     <div className="h-[100dvh] w-full bg-slate-950 text-fg font-sans flex flex-col overflow-hidden transition-colors relative">
+      
       {/* Toast Notification Matrix */}
       <AnimatePresence>
         {toasts.length > 0 && (
-          <div className="fixed top-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none">
+          <div className="absolute top-16 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
             {toasts.map(t => (
               <motion.div
                 key={t.id}
-                initial={{ opacity: 0, x: 50, filter: 'blur(10px)' }}
-                animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
-                exit={{ opacity: 0, x: 20, filter: 'blur(5px)' }}
+                initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: -10 }}
                 className={cn(
-                  "p-4 rounded-xl shadow-2xl flex items-center gap-4 backdrop-blur-3xl border border-white/10 text-[10px] font-black uppercase tracking-widest pointer-events-auto min-w-[320px] relative overflow-hidden",
-                  t.type === 'ok' ? "bg-success/10 text-success border-success/30" : 
-                  t.type === 'er' ? "bg-danger/10 text-danger border-danger/30" : 
-                  "bg-info/10 text-info border-info/30"
+                  "p-3 rounded-lg shadow-2xl flex items-center gap-3 backdrop-blur-3xl border text-[10px] font-bold uppercase tracking-widest pointer-events-auto min-w-[280px] relative overflow-hidden",
+                  t.type === 'ok' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : 
+                  t.type === 'er' ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : 
+                  "bg-sky-500/10 text-sky-400 border-sky-500/20"
                 )}
               >
-                <div className="absolute top-0 left-0 w-1 h-full bg-current opacity-50" />
-                <div className="w-8 h-8 rounded-lg bg-current/10 flex items-center justify-center shrink-0">
+                <div className="absolute inset-0 bg-gradient-to-r from-current/5 to-transparent pointer-events-none" />
+                <div className={cn(
+                   "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-inner",
+                   t.type === 'ok' ? "bg-emerald-500/20" : t.type === 'er' ? "bg-rose-500/20" : "bg-sky-500/20"
+                )}>
                   {t.type === 'ok' && <CheckCircle2 size={16} />}
                   {t.type === 'er' && <AlertCircle size={16} />}
                   {t.type === 'in' && <InfoIcon size={16} />}
                 </div>
-                <div className="flex flex-col gap-1">
-                   <div className="opacity-60 text-[8px] tracking-[0.2em]">System Alert</div>
-                   <div>{t.msg}</div>
+                <div className="flex flex-col">
+                   <div className="opacity-70 text-[8px] tracking-[0.2em] font-black">System</div>
+                   <div className="text-white/90">{t.msg}</div>
                 </div>
               </motion.div>
             ))}
@@ -838,230 +812,248 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Desktop Navigation Core (Collapsible Sidebar) - Smart & Narrow */}
-      <aside 
-        className={cn(
-          "hidden md:flex flex-col bg-bg2/40 border-r border-border/40 backdrop-blur-3xl transition-all duration-500 ease-in-out relative z-50 no-print",
-          isSidebarCollapsed ? "w-[72px]" : "w-[240px]"
-        )}
-      >
-        {/* Sidebar Toggle Pivot */}
-        <button 
-          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="absolute -right-3 top-10 w-6 h-6 bg-accent rounded-full flex items-center justify-center text-slate-950 shadow-lg z-[60] hover:scale-110 active:scale-95 transition-all border-2 border-bg"
-        >
-          <motion.div animate={{ rotate: isSidebarCollapsed ? 0 : 180 }}>
-            <ChevronRight size={14} />
-          </motion.div>
-        </button>
-
-        {/* Brand Matrix */}
-        <div className="h-16 px-5 flex items-center gap-4 border-b border-border/20 overflow-hidden shrink-0">
-          <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center shrink-0 shadow-lg group">
-            <Target size={22} className="text-slate-950 group-hover:scale-110 transition-transform" />
-          </div>
-          <AnimatePresence>
-            {!isSidebarCollapsed && (
-              <motion.div 
-                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
-                className="whitespace-nowrap"
-              >
-                <div className="text-[14px] font-black uppercase tracking-tighter leading-none mb-0.5 italic">ALPHA<span className="text-accent underline underline-offset-4">ERP</span></div>
-                <div className="text-[8px] font-black uppercase tracking-[0.2em] text-muted leading-none">Core Operations</div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Navigation Matrix */}
-        <nav className="flex-1 overflow-y-auto no-scrollbar px-3 py-6 space-y-1">
-          {filteredNavTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                "w-full flex items-center transition-all duration-300 rounded-xl relative group overflow-hidden h-11 px-3",
-                activeTab === tab.id 
-                  ? "bg-accent text-slate-950 font-black shadow-lg shadow-accent/20" 
-                  : "text-muted hover:bg-white/5 hover:text-fg"
-              )}
-              title={isSidebarCollapsed ? tab.label : ""}
-            >
-              <tab.icon size={20} className={cn("shrink-0 transition-transform group-hover:scale-110", activeTab === tab.id ? "" : "opacity-60")} />
-              <AnimatePresence>
-                {!isSidebarCollapsed && (
-                  <motion.span 
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap ml-4"
-                  >
-                    {tab.label}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-              {activeTab === tab.id && (
-                <motion.div layoutId="side-tab-bar" className="absolute left-0 w-0.5 h-4 bg-slate-950 rounded-full" />
-              )}
-            </button>
-          ))}
-        </nav>
-
-        {/* Sidebar Status Matrix */}
-        <div className="p-3 border-t border-border/20 bg-slate-950/20">
-           <div className={cn("flex flex-col gap-1", isSidebarCollapsed ? "items-center" : "")}>
-              <button onClick={toggleTheme} className="w-full flex items-center px-3 py-2.5 rounded-xl text-muted hover:bg-white/5 transition-all group" title="Theme Matrix">
-                 {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Interface Theme</span>}
-              </button>
-              <button onClick={downloadPDF} className="w-full flex items-center px-3 py-2.5 rounded-xl text-muted hover:bg-white/5 transition-all group" title="System Export">
-                 <Download size={20} className="group-hover:text-accent" />
-                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Full Report</span>}
-              </button>
-              <button onClick={handleLogout} className="w-full flex items-center px-3 py-2.5 rounded-xl text-danger/60 hover:bg-danger/10 hover:text-danger transition-all group" title="Emergency Sign Out">
-                 <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
-                 {!isSidebarCollapsed && <span className="text-[9px] font-black uppercase tracking-widest ml-4">Secure Sign-out</span>}
-              </button>
-           </div>
-        </div>
-      </aside>
-
-      {/* Main Framework Viewport */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-bg relative">
-         {/* Static Overlay Noise */}
-         <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')] z-0" />
+      {/* Floating Frozen Top Header */}
+      <div className="flex-none bg-slate-950 border-b border-indigo-500/20 z-50 sticky top-0 shadow-xl relative grid">
+         {/* Top Header Background Glow */}
+         <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
          
-         {/* Smart Status Bar - Narrow & Professional */}
-         <header className="h-14 px-6 border-b border-border/20 flex items-center justify-between no-print z-10 backdrop-blur-2xl">
-            <div className="flex items-center gap-6">
-               <div className="md:hidden p-2 text-muted" onClick={() => setIsMobileMenuOpen(true)}>
-                  <LayoutDashboard size={20} />
-               </div>
-               <div className="flex items-center gap-3">
-                  <span className="sst text-[8px] opacity-40">System Core</span>
-                  <ChevronRight size={10} className="text-muted/20" />
-                  <span className="st text-sm tracking-[0.2em]">{filteredNavTabs.find(t => t.id === activeTab)?.label}</span>
-               </div>
-            </div>
+         {/* Line 1: Workspace Utilities */}
+         <div className="flex items-center justify-between px-2 md:px-4 py-2 border-b border-white/5 h-14 bg-slate-900/50">
             
-            <div className="flex items-center gap-8">
-               <div className="hidden lg:flex items-center gap-6 border-r border-border/20 pr-8">
-                  <DigitalClock />
-                  <div className="w-10 h-10 rounded-xl bg-slate-800 border border-white/5 flex items-center justify-center text-[11px] font-black text-accent shadow-inner">
-                     {user.email?.charAt(0).toUpperCase()}
+            {/* Left side: Brand */}
+            <div className="flex flex-col items-start text-left shrink-0">
+               <span className="text-[14px] md:text-[18px] font-black tracking-wider text-emerald-400 hidden sm:block leading-none uppercase drop-shadow-md">
+                  ALPHA CLOTHING LTD.
+               </span>
+               <span className="text-[12px] font-black tracking-wider text-emerald-400 sm:hidden leading-none uppercase drop-shadow-md">
+                  ALPHA
+               </span>
+               <span className="text-[9px] md:text-[10px] font-bold text-slate-300 tracking-wider uppercase mt-1.5 hidden sm:block">
+                  The Best Look Anytime Anywhere
+               </span>
+            </div>
+
+            {/* Right side: AI -> Download -> Date/Time -> User Profile */}
+            <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-0 sm:ml-auto w-full sm:w-auto overflow-x-auto no-scrollbar shrink-0 justify-end h-full py-2">
+               
+               {/* 1st: AI Icon */}
+               <div className="flex items-center gap-2 bg-slate-800/60 px-2 py-1.5 rounded-lg border border-white/5 shadow-sm min-w-[70px] cursor-pointer hover:bg-slate-800 transition-colors" title="AI Assistant Active">
+                  <div className="text-indigo-400 bg-indigo-500/10 p-1.5 rounded-md">
+                     <Bot size={14} strokeWidth={2.5} />
+                  </div>
+                  <div className="hidden lg:flex flex-col text-left leading-[1.1]">
+                     <span className="text-[10px] font-black uppercase text-[#a8b1ff] tracking-wider">AI</span>
+                     <span className="text-[8px] text-slate-400 font-bold tracking-widest uppercase mt-0.5">Active</span>
                   </div>
                </div>
-               <div className="flex items-center gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse shadow-[0_0_8px_rgba(34,197,94,1)]" />
-                  <span className="text-[9px] font-black uppercase tracking-widest text-success">Secure Real-time</span>
+
+               {/* 2nd: Download Dropdown */}
+               <div className="relative h-full flex items-center shrink-0">
+                  <button 
+                     onClick={() => setIsDownloadOpen(!isDownloadOpen)} 
+                     className="bg-slate-800/60 border border-white/5 text-slate-300 hover:bg-slate-800 hover:text-white transition-all flex items-center gap-2 px-2 py-1.5 rounded-lg shadow-sm"
+                  >
+                     <div className="text-amber-400 bg-amber-500/10 p-1.5 rounded-md">
+                        <Download size={14} strokeWidth={2.5} />
+                     </div>
+                     <div className="hidden lg:flex flex-col text-left pr-2 leading-[1.1]">
+                        <span className="text-[10px] font-black uppercase tracking-wider">Download</span>
+                        <span className="text-[8px] opacity-70 font-bold tracking-widest uppercase mt-0.5">Report</span>
+                     </div>
+                  </button>
+                  <AnimatePresence>
+                     {isDownloadOpen && (
+                        <motion.div key="download-menu" className="relative z-50">
+                           <div 
+                              className="fixed inset-0 z-40" 
+                              onClick={() => setIsDownloadOpen(false)} 
+                           />
+                           <motion.div 
+                              initial={{ opacity: 0, scale: 0.95, y: 5 }} 
+                              animate={{ opacity: 1, scale: 1, y: 0 }} 
+                              exit={{ opacity: 0, scale: 0.95, y: 5 }}
+                              className="absolute right-0 top-full mt-2 w-[160px] bg-slate-800 border border-white/10 rounded-xl shadow-2xl overflow-hidden py-1.5 z-50 origin-top-right"
+                           >
+                              <button 
+                                 onClick={() => { downloadPDF(); setIsDownloadOpen(false); }}
+                                 className="w-full text-left px-3 py-2.5 hover:bg-white/5 text-[10px] font-black text-slate-300 hover:text-white flex items-center gap-2.5 uppercase tracking-wider transition-colors"
+                              >
+                                 <FileText size={14} className="text-rose-400" /> PDF Report
+                              </button>
+                              <button 
+                                 onClick={() => { exportExcel(); setIsDownloadOpen(false); }}
+                                 className="w-full text-left px-3 py-2.5 hover:bg-white/5 text-[10px] font-black text-slate-300 hover:text-white flex items-center gap-2.5 uppercase tracking-wider transition-colors"
+                              >
+                                 <FileSpreadsheet size={14} className="text-emerald-400" /> Excel Sheet
+                              </button>
+                           </motion.div>
+                        </motion.div>
+                     )}
+                  </AnimatePresence>
+               </div>
+
+               {/* 3rd: Time and Date */}
+               <div className="flex items-center gap-3 bg-slate-800/60 px-3 py-1.5 rounded-lg border border-white/5 shadow-sm min-w-[140px] shrink-0">
+                  <div className="hidden sm:block">
+                     <DigitalClock />
+                  </div>
+               </div>
+
+               {/* 4th: User Icon / Profile */}
+               <div className="relative shrink-0 flex items-center h-full">
+                  <button 
+                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                     className="flex items-center gap-2 bg-slate-800/60 hover:bg-slate-800 p-1.5 pr-3 rounded-lg transition-colors border border-white/5 shadow-sm min-w-[120px]"
+                  >
+                     <div className="w-8 h-8 rounded-md bg-gradient-to-tr from-sky-500 to-indigo-500 flex items-center justify-center text-white font-black text-xs shadow-inner shrink-0">
+                        {user.email?.charAt(0).toUpperCase()}
+                     </div>
+                     <div className="hidden lg:flex flex-col text-left leading-[1.1]">
+                        <span className="text-[11px] font-black text-slate-200 capitalize truncate w-full max-w-[100px]">{userProfile?.name || user.email?.split('@')[0]}</span>
+                        <span className="text-[8px] font-bold text-sky-400 uppercase tracking-widest mt-0.5">{userProfile?.role || 'Guest'}</span>
+                     </div>
+                  </button>
+                  
+                  <AnimatePresence>
+                     {isUserMenuOpen && (
+                        <motion.div key="user-menu" className="relative z-50">
+                           <div 
+                              className="fixed inset-0 z-40" 
+                              onClick={() => setIsUserMenuOpen(false)} 
+                           />
+                           <motion.div 
+                              initial={{ opacity: 0, scale: 0.95, y: 5 }} 
+                              animate={{ opacity: 1, scale: 1, y: 0 }} 
+                              exit={{ opacity: 0, scale: 0.95, y: 5 }}
+                              className="absolute right-0 top-full mt-2 w-72 bg-slate-800/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden py-2 z-50 origin-top-right flex flex-col"
+                           >
+                              <div className="px-5 py-4 border-b border-white/10 flex items-center gap-4 bg-white/5">
+                                 <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-500 flex items-center justify-center text-white font-black text-xl shadow-inner shrink-0">
+                                    {user.email?.charAt(0).toUpperCase()}
+                                 </div>
+                                 <div className="flex flex-col overflow-hidden w-full">
+                                    <span className="text-sm font-black text-white capitalize truncate">{userProfile?.name || user.email?.split('@')[0]}</span>
+                                    <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest mt-1">{userProfile?.role || 'Guest'}</span>
+                                 </div>
+                              </div>
+                              
+                              <div className="px-5 py-4 flex flex-col gap-3 border-b border-white/10 text-xs">
+                                 <div className="flex items-center gap-3 text-slate-300">
+                                    <Mail size={14} className="text-slate-500 shrink-0" />
+                                    <span className="truncate">{user.email}</span>
+                                 </div>
+                                 <div className="flex items-center gap-3 text-slate-300">
+                                    <Phone size={14} className="text-slate-500 shrink-0" />
+                                    <span>{userProfile?.phone || '+880 1700 000000'}</span>
+                                 </div>
+                                 <div className="flex items-center gap-3 text-slate-300">
+                                    <Briefcase size={14} className="text-slate-500 shrink-0" />
+                                    <span className="truncate">{userProfile?.designation || 'Head of IT & Operations'}</span>
+                                 </div>
+                              </div>
+
+                              <div className="p-2">
+                                 <button 
+                                    onClick={() => { toggleTheme(); setIsUserMenuOpen(false); }}
+                                    className="w-full text-left px-3 py-2 hover:bg-white/5 rounded-lg text-xs font-bold text-slate-300 hover:text-white flex items-center gap-3 transition-colors"
+                                 >
+                                    {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+                                    Toggle Theme
+                                 </button>
+                                 <button 
+                                    onClick={() => { handleLogout(); setIsUserMenuOpen(false); }}
+                                    className="w-full text-left px-3 py-2 hover:bg-white/5 rounded-lg text-xs font-bold text-rose-400 hover:text-rose-300 flex items-center gap-3 transition-colors mt-1 border border-transparent hover:border-rose-500/20"
+                                 >
+                                    <LogOut size={15} />
+                                    Sign Out
+                                 </button>
+                              </div>
+                           </motion.div>
+                        </motion.div>
+                     )}
+                  </AnimatePresence>
                </div>
             </div>
-         </header>
-
-         {/* Dynamic Grid Viewport */}
-         <div id="report-content" className="flex-1 overflow-y-auto custom-scrollbar p-6 pb-24 md:pb-6 relative z-10">
-            <React.Suspense fallback={
-               <div className="h-full flex flex-col items-center justify-center opacity-30 gap-6">
-                  <div className="w-16 h-16 border-4 border-accent/10 border-t-accent rounded-full animate-spin shadow-2xl shadow-accent/20" />
-                  <div className="flex flex-col items-center gap-2">
-                     <p className="text-[12px] font-black uppercase tracking-[0.4em] animate-pulse">Synchronizing Interface</p>
-                     <p className="text-[8px] font-black uppercase tracking-[0.1em] text-muted">Alpha Core Matrix v5.5.4</p>
-                  </div>
-               </div>
-            }>
-               <AnimatePresence mode="wait">
-                  <motion.div
-                    key={activeTab}
-                    initial={{ opacity: 0, y: 10, filter: 'blur(5px)' }}
-                    animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-                    exit={{ opacity: 0, y: -10, filter: 'blur(5px)' }}
-                    transition={{ duration: 0.3 }}
-                    className="mx-auto w-full max-w-[1800px]"
-                  >
-                    {activeTab === 'dash' && <Dashboard orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
-                    {activeTab === 'master' && <OrderMaster orders={sortedOrders} addToast={addToast} userProfile={userProfile} />}
-                    {activeTab === 'ship-schedule' && <ShipmentSchedule orders={sortedOrders} />}
-                    {activeTab === 'entry' && <DataEntry orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} addToast={addToast} userProfile={userProfile} />}
-                    {activeTab === 'fin-track' && <FinishingTracker orders={sortedOrders} entries={sortedEntries} addToast={addToast} userProfile={userProfile} />}
-                    {activeTab === 'status' && <StatusReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
-                    {activeTab === 'dpr' && <DPRReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} />}
-                    {activeTab === 'wip' && <WIPReport orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poAggregates={aggregates.poMap} />}
-                    {activeTab === 'lib' && <ExcelLibrary />}
-                    {activeTab === 'custom-report' && <ReportBuilder ref={reportBuilderRef} orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} />}
-                    {activeTab === 'health' && <SystemHealth orders={sortedOrders} entries={sortedEntries} />}
-                    {activeTab === 'settings' && (
-                      <SettingsModule 
-                        orders={orders} 
-                        entries={entries} 
-                        userProfile={userProfile}
-                        currentTheme={theme}
-                        setTheme={setTheme}
-                        appSettings={appSettings}
-                        updateAppSettings={updateAppSettings}
-                        onLogout={handleLogout}
-                      />
-                    )}
-                  </motion.div>
-               </AnimatePresence>
-            </React.Suspense>
          </div>
 
-         {/* Compact Footer Bar */}
-         <footer className="h-10 bg-bg2/80 border-t border-border/20 px-6 flex items-center justify-between no-print shrink-0 relative z-20 backdrop-blur-3xl">
-            <div className="flex items-center gap-4">
-               <span className="text-[9px] font-black text-muted uppercase tracking-widest pl-2 border-l border-accent/30">System Ready</span>
-            </div>
-            <div className="flex items-center gap-6 divide-x divide-white/5">
-               <span className="text-[9px] font-black text-muted uppercase tracking-[0.2em] pl-6">Core Engine v5.54</span>
-               <span className="hidden sm:block text-[9px] font-black text-muted uppercase tracking-[0.2em] pl-6">Access: {userProfile?.role?.toUpperCase()}</span>
-            </div>
-         </footer>
-      </main>
-
-      {/* Mobile Framework - Minimal Nav */}
-      <nav className="fixed bottom-0 left-0 right-0 md:hidden bg-bg2/90 backdrop-blur-3xl border-t border-border/40 h-16 flex items-center justify-around px-2 z-[100] no-print">
-         {mobileTabs.slice(0, 4).map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={cn("flex flex-col items-center gap-1 w-12", activeTab === tab.id ? "text-accent" : "text-muted")}>
-               <tab.icon size={20} />
-               <span className="text-[8px] font-black uppercase tracking-tight">{tab.label.split(' ')[0]}</span>
-            </button>
-         ))}
-         <button onClick={() => setIsMobileMenuOpen(true)} className="flex flex-col items-center gap-1 text-muted w-12">
-            <Plus size={20} />
-            <span className="text-[8px] font-black uppercase tracking-tight">Menu</span>
-         </button>
-      </nav>
-
-      {/* Mobile Sidebar Overlay Matrix */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMobileMenuOpen(false)} className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200]" />
-            <motion.div 
-               initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }}
-               className="fixed inset-y-0 left-0 w-[85%] max-w-[320px] bg-bg border-r border-border/50 z-[201] flex flex-col p-6 shadow-3xl"
-            >
-               <div className="flex items-center justify-between mb-10">
-                  <div className="st">Operations</div>
-                  <X size={20} onClick={() => setIsMobileMenuOpen(false)} />
-               </div>
-               <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar">
-                  {filteredNavTabs.map(tab => (
-                     <button key={tab.id} onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }} className={cn("w-full flex items-center gap-4 p-4 rounded-xl", activeTab === tab.id ? "bg-accent text-slate-950 font-bold" : "text-muted hover:bg-white/5")}>
-                        <tab.icon size={20} />
-                        <span className="text-xs uppercase tracking-widest">{tab.label}</span>
+         {/* Line 2: Horizontal Scroll Navigation */}
+         <div className="flex items-center overflow-x-auto no-scrollbar px-2 py-1.5 h-12 relative w-full items-center justify-between">
+            <div className="flex items-center gap-2 px-2 shrink-0">
+               {filteredNavTabs.map(tab => {
+                  const isActive = activeTab === tab.id;
+                  return (
+                     <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={cn(
+                           "flex items-center gap-2 px-4 py-1.5 rounded-full whitespace-nowrap transition-all text-[11px] uppercase tracking-widest font-black shrink-0 border relative overflow-hidden group",
+                           isActive 
+                              ? `bg-slate-800 ${tab.color} border-white/10 shadow-[inset_0_1px_rgba(255,255,255,0.05)]` 
+                              : "text-slate-500 hover:text-white border-transparent hover:bg-slate-800/50"
+                        )}
+                     >
+                        {isActive && <div className={cn("absolute inset-0 opacity-10 bg-current")} />}
+                        <tab.icon size={14} strokeWidth={isActive ? 2.5 : 2} className="relative z-10" />
+                        <span className="relative z-10">{tab.label}</span>
                      </button>
-                  ))}
-               </div>
-               <div className="mt-auto pt-6 border-t border-border/20 space-y-4">
-                  <div className="flex items-center justify-between">
-                     <span className="sst">Theme Mode</span>
-                     <button onClick={toggleTheme} className="p-3 bg-white/5 rounded-xl">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
-                  </div>
-                  <button onClick={handleLogout} className="w-full py-4 bg-danger/10 text-danger rounded-xl text-[10px] font-black uppercase tracking-widest">Secure Exit</button>
-               </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+                  );
+               })}
+            </div>
+            
+            <div className="flex flex-1" />
+            
+            <div className="flex items-center gap-3 shrink-0 px-3 border-l border-white/5 ml-2">
+               <button onClick={toggleTheme} className="text-slate-400 hover:text-amber-400 transition-colors" title="Toggle Theme">
+                  {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+               </button>
+               <button onClick={handleLogout} className="text-slate-400 hover:text-rose-400 transition-colors" title="Logout">
+                  <RefreshCw size={15} />
+               </button>
+               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse ml-2" title="System Live" />
+            </div>
+         </div>
+      </div>
+
+      {/* Main Workspace Workspace */}
+      <div id="report-content" className="flex-1 overflow-y-auto custom-scrollbar p-2 md:p-6 relative z-10">
+         <React.Suspense fallback={
+            <div className="h-full flex flex-col items-center justify-center opacity-60 gap-4">
+               <div className="w-10 h-10 rounded-full border-[3px] border-indigo-500/20 border-t-indigo-500 animate-spin" />
+               <h3 className="text-[10px] font-black text-indigo-400 tracking-[0.2em] uppercase">Loading System...</h3>
+            </div>
+         }>
+            <AnimatePresence mode="wait">
+               <motion.div
+                 key={activeTab}
+                 initial={{ opacity: 0, filter: 'blur(4px)', y: 10 }}
+                 animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                 exit={{ opacity: 0, filter: 'blur(4px)', y: -10 }}
+                 transition={{ duration: 0.3 }}
+                 className="mx-auto w-full max-w-[1900px] min-h-full"
+               >
+                 {activeTab === 'dash' && <Dashboard orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} poColorAggregates={aggregates.poColorMap} />}
+                 {activeTab === 'master' && <OrderMaster orders={sortedOrders} addToast={addToast} userProfile={userProfile} />}
+                 {activeTab === 'entry' && <DataEntry orders={sortedOrders} entries={sortedEntries} getPOInfo={getPOInfo} addToast={addToast} userProfile={userProfile} />}
+                 {activeTab === 'lib' && <ExcelLibrary />}
+                 {activeTab === 'health' && <SystemHealth orders={sortedOrders} entries={sortedEntries} />}
+                 {activeTab === 'settings' && (
+                   <SettingsModule 
+                     orders={orders} 
+                     entries={entries} 
+                     userProfile={userProfile}
+                     currentTheme={theme}
+                     setTheme={setTheme}
+                     appSettings={appSettings}
+                     updateAppSettings={updateAppSettings}
+                     onLogout={handleLogout}
+                   />
+                 )}
+               </motion.div>
+            </AnimatePresence>
+         </React.Suspense>
+      </div>
+
+      <FloatingAgent />
     </div>
   );
 }

@@ -742,7 +742,20 @@ export default React.memo(function OrderMaster({ orders, addToast, userProfile }
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-bold text-muted uppercase tracking-wider">Style No *</label>
-                    <input name="style" type="text" value={formData.style} onChange={handleFormChange} className="fi" placeholder="e.g. NRF26-2015W" required />
+                    <input 
+                      name="style" 
+                      type="text" 
+                      value={formData.style} 
+                      onChange={handleFormChange} 
+                      className="fi" 
+                      placeholder="Type or Select Style" 
+                      autoComplete="off"
+                      list="style-list"
+                      required 
+                    />
+                    <datalist id="style-list">
+                      {Array.from(new Set(orders.map(o => o.style))).sort().map(s => <option key={s} value={s} />)}
+                    </datalist>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-bold text-muted uppercase tracking-wider">PO No *</label>
@@ -1044,7 +1057,7 @@ interface BulkImportModalProps {
 function BulkImportModal({ onClose, onSave, existingOrders }: BulkImportModalProps) {
   const [rawText, setRawText] = useState('');
   const [buyer, setBuyer] = useState('');
-  const [parsedData, setParsedData] = useState<(Omit<Order, 'id'> & { error?: string })[]>([]);
+  const [parsedData, setParsedData] = useState<(Omit<Order, 'id'> & { error?: string; isDuplicate?: boolean })[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [headerMap, setHeaderMap] = useState<Record<string, number>>({});

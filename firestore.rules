@@ -163,6 +163,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     
+    match /app_settings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
     match /excel_files/{fileId} {
       allow read: if isAuthenticated();
       allow create: if hasPermission('manage-orders') && isValidExcelFile(request.resource.data);

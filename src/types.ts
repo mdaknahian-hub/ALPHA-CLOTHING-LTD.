@@ -7,6 +7,7 @@ export interface Order {
   shipDate: string;
   color: string;
   orderQty: number;
+  isDuplicate?: boolean;
 }
 
 export interface ProductionEntry {
@@ -21,8 +22,8 @@ export interface ProductionEntry {
   finOut: number;
   poly: number;
   shipment: number;
+  floor?: string;
   lineNo?: string;
-  floor?: 'Woven' | 'Knit' | '';
   violations?: string[];
 }
 
@@ -67,19 +68,7 @@ export interface SystemSettings {
   dataRetentionDays: number;
 }
 
-export interface FinishingTrackingEntry {
-  id: string;
-  date: string;
-  style: string;
-  poNo: string;
-  color: string;
-  lineNo: string;
-  input: number;
-  output: number;
-  orderQty: number;
-  createdAt: string;
-  userId: string;
-}
+
 
 export interface ExcelFile {
   id: string;

@@ -25,13 +25,17 @@ import {
   Contrast,
   Grid3X3,
   MousePointer2,
-  RefreshCw
+  RefreshCw,
+  Bot,
+  Lock,
+  Unlock,
+  Power
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { AppUser, UserRole, UserStatus } from '../types';
 import { db, auth } from '../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import AboutSection from './AboutSection';
 import SystemHealth from './SystemHealth';
@@ -72,9 +76,15 @@ export default function SettingsModule({
   updateAppSettings,
   onLogout
 }: SettingsProps) {
-  const [activeTab, setActiveTab] = useState<'profile' | 'users' | 'theme' | 'layout' | 'about' | 'health'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'users' | 'theme' | 'layout' | 'ai_control' | 'health' | 'about'>('profile');
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // AI Security
+  const [aiControlData, setAiControlData] = useState<{ status: 'active' | 'frozen', pin: string, agentName?: string, agentIcon?: string, systemPrompt?: string }>({ status: 'active', pin: '' });
+  const [pinInput, setPinInput] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [isUnlocked, setIsUnlocked] = useState(false);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
@@ -82,7 +92,19 @@ export default function SettingsModule({
       setUsers(usersData);
       setLoading(false);
     });
-    return () => unsub();
+
+    const aiUnsub = onSnapshot(doc(db, 'app_settings', 'ai_control'), (snap) => {
+      if (snap.exists()) {
+        setAiControlData(snap.data() as any);
+      } else {
+        setDoc(doc(db, 'app_settings', 'ai_control'), { status: 'active', pin: '' });
+      }
+    });
+
+    return () => {
+       unsub();
+       aiUnsub();
+    };
   }, []);
 
   const handleLogoutClick = async () => {
@@ -97,6 +119,30 @@ export default function SettingsModule({
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const verifyPin = () => {
+    if (!aiControlData.pin || pinInput === aiControlData.pin || userProfile?.email === 'aknahian@gmail.com') { // Super Admin bypass in case forgot
+      setIsUnlocked(true);
+      setPinInput('');
+    } else {
+      alert("Invalid password");
+    }
+  };
+
+  const setAiPin = async () => {
+    if (!newPin || newPin.length < 4) {
+       alert("Password must be at least 4 characters");
+       return;
+    }
+    await updateDoc(doc(db, 'app_settings', 'ai_control'), { pin: newPin });
+    setNewPin('');
+    alert("AI Settings Password Updated!");
+  };
+
+  const toggleAiStatus = async () => {
+    const newStatus = aiControlData.status === 'active' ? 'frozen' : 'active';
+    await updateDoc(doc(db, 'app_settings', 'ai_control'), { status: newStatus });
   };
 
   const updateSetting = (key: string, value: any) => {
@@ -127,6 +173,7 @@ export default function SettingsModule({
     { id: 'theme', label: 'Style & Theme', icon: Palette, desc: 'Colors, fonts & sizes' },
     { id: 'layout', label: 'Layout Design', icon: Grid3X3, desc: 'Navigation positioning' },
     userProfile?.role === 'admin' && { id: 'users', label: 'User Control', icon: Shield, desc: 'Manage factory access' },
+    userProfile?.role === 'admin' && { id: 'ai_control', label: 'AI Control', icon: Bot, desc: 'Password protect AI' },
     { id: 'health', label: 'System Logs', icon: Activity, desc: 'Live connectivity data' },
     { id: 'about', label: 'Blueprints', icon: Info, desc: 'A-Z App documentation' },
   ].filter(Boolean) as { id: any; label: string; icon: any; desc: string }[];
@@ -486,6 +533,176 @@ export default function SettingsModule({
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* --- AI AGENT CONTROL (ADMIN) --- */}
+            {activeTab === 'ai_control' && (
+              <div className="space-y-6">
+                {!isUnlocked && aiControlData.pin ? (
+                  <div className="bg-card border border-border rounded-[40px] p-10 shadow-2xl max-w-sm mx-auto mt-10">
+                    <div className="text-center mb-6 text-accent">
+                      <Lock size={48} className="mx-auto" />
+                      <h3 className="text-xl font-black uppercase tracking-tighter mt-4">Security Lock</h3>
+                    </div>
+                    <input 
+                      type="password"
+                      value={pinInput}
+                      onChange={(e) => setPinInput(e.target.value)}
+                      placeholder="Enter AI Control Password"
+                      className="w-full bg-bg border border-border rounded-xl p-4 text-center tracking-[0.5em] focus:border-accent outline-none mb-4"
+                    />
+                    <button 
+                      onClick={verifyPin}
+                      className="w-full bg-accent text-slate-950 font-black uppercase text-xs p-4 rounded-xl flex items-center justify-center gap-2 hover:bg-white transition-colors"
+                    >
+                      <Unlock size={16} /> Unlock Settings
+                    </button>
+                    {userProfile?.email === 'aknahian@gmail.com' && (
+                       <p className="text-center mt-4 text-[10px] text-muted">Super Admin: Submit with blank password to bypass.</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-8 animate-in fade-in">
+                    <div className="bg-card border border-border rounded-[40px] p-10 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-6">
+                       <div>
+                         <h3 className="text-xl font-black uppercase tracking-tighter mb-2 flex items-center gap-3">
+                           <Power size={24} className={aiControlData.status === 'active' ? 'text-success' : 'text-danger'} /> 
+                           Agent Master Switch
+                         </h3>
+                         <p className="text-xs text-muted font-bold uppercase w-80">
+                           {aiControlData.status === 'active' 
+                             ? "AI is fully operational. It can access app data and interact with users." 
+                             : "AI is completely frozen. Users cannot interact with the agent or query data."}
+                         </p>
+                       </div>
+                       <button
+                         onClick={toggleAiStatus}
+                         className={cn(
+                           "px-8 py-4 rounded-2xl border-2 font-black uppercase text-xs tracking-widest transition-all flex items-center gap-2",
+                           aiControlData.status === 'active' 
+                             ? "bg-danger/10 text-danger border-danger/20 hover:bg-danger hover:text-white" 
+                             : "bg-success/10 text-success border-success/20 hover:bg-success hover:text-slate-950"
+                         )}
+                       >
+                         <Power size={18} />
+                         {aiControlData.status === 'active' ? "Freeze AI System" : "Activate AI System"}
+                       </button>
+                    </div>
+
+                    <div className="bg-card border border-border rounded-[40px] p-10 shadow-2xl max-w-2xl">
+                      <h3 className="text-xl font-black uppercase tracking-tighter mb-6 flex items-center gap-3">
+                         <Bot size={24} className="text-accent" /> Agent Configuration
+                      </h3>
+                      
+                      <div className="space-y-4">
+                        {/* New Settings */}
+                        <div className="flex items-center justify-between p-4 bg-bg border border-border rounded-xl">
+                           <span className="text-xs font-black uppercase text-muted">AI Agent Status</span>
+                           <button
+                             onClick={() => updateDoc(doc(db, 'app_settings', 'ai_control'), { enabled: !(aiControlData as any).enabled })}
+                             className={cn("w-12 h-6 rounded-full relative transition-all", (aiControlData as any).enabled ? "bg-accent" : "bg-border")}
+                           >
+                             <motion.div animate={{ x: (aiControlData as any).enabled ? 24 : 4 }} className="w-4 h-4 bg-black rounded-full absolute top-0.5" />
+                           </button>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-muted mb-2">Default AI Model</label>
+                          <select 
+                             value={(aiControlData as any).model || 'gemini-3-flash-preview'}
+                             onChange={(e) => updateDoc(doc(db, 'app_settings', 'ai_control'), { model: e.target.value })}
+                             className="w-full bg-bg border border-border rounded-xl p-4 focus:border-accent outline-none"
+                          >
+                             <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+                             <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                          </select>
+                        </div>
+                        <div className="h-px bg-border my-2"></div>
+                        
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-muted mb-2">Agent Name</label>
+                          <input 
+                            type="text"
+                            value={aiControlData.agentName || ''}
+                            onChange={(e) => setAiControlData(prev => ({...prev, agentName: e.target.value}))}
+                            placeholder="e.g. ALPHA_AI"
+                            className="w-full bg-bg border border-border rounded-xl p-4 focus:border-accent outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-muted mb-2">Icon Style</label>
+                          <div className="flex gap-4">
+                            {['Bot', 'Brain', 'Sparkles', 'Cpu'].map(iconName => (
+                              <button 
+                                key={iconName}
+                                onClick={() => setAiControlData(prev => ({...prev, agentIcon: iconName}))}
+                                className={cn(
+                                  "p-4 rounded-xl border-2 transition-all",
+                                  aiControlData.agentIcon === iconName ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-slate-600"
+                                )}
+                              >
+                                {iconName}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-muted mb-2 flex items-center gap-2">
+                             System Instructions (Personality & Rules)
+                          </label>
+                          <textarea 
+                            value={aiControlData.systemPrompt || ''}
+                            onChange={(e) => setAiControlData(prev => ({...prev, systemPrompt: e.target.value}))}
+                            placeholder="You are a highly intelligent..."
+                            rows={8}
+                            className="w-full bg-bg border border-border rounded-xl p-4 focus:border-accent outline-none text-sm font-mono"
+                          />
+                        </div>
+
+                        <div className="pt-4 border-t border-border flex justify-end">
+                          <button 
+                            onClick={async () => {
+                              await updateDoc(doc(db, 'app_settings', 'ai_control'), {
+                                agentName: aiControlData.agentName || 'System AI Agent',
+                                agentIcon: aiControlData.agentIcon || 'Bot',
+                                systemPrompt: aiControlData.systemPrompt || ''
+                              });
+                              alert("AI Settings Saved Successfully!");
+                            }}
+                            className="bg-accent text-slate-950 px-8 py-4 font-black uppercase tracking-widest text-xs rounded-xl hover:bg-white"
+                          >
+                            Save Configuration
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-card border border-border rounded-[40px] p-10 shadow-2xl max-w-2xl">
+                      <h3 className="text-xl font-black uppercase tracking-tighter mb-6 flex items-center gap-3">
+                         <ShieldCheck size={20} className="text-accent" /> Password Protection
+                      </h3>
+                      <p className="text-xs text-muted mb-4 font-bold">Change the AI Control Settings Password.</p>
+                      <div className="flex gap-4">
+                        <input 
+                          type="password"
+                          value={newPin}
+                          onChange={(e) => setNewPin(e.target.value)}
+                          placeholder="New Password..."
+                          className="flex-1 bg-bg border border-border rounded-xl p-4 focus:border-accent outline-none"
+                        />
+                        <button 
+                          onClick={setAiPin}
+                          className="bg-accent text-slate-950 px-8 font-black uppercase tracking-widest text-xs rounded-xl hover:bg-white"
+                        >
+                          Save Password
+                        </button>
+                      </div>
+                      {aiControlData.pin && <p className="text-xs text-success mt-4 font-bold uppercase tracking-wider">✓ Password is currently active</p>}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

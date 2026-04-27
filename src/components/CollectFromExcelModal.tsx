@@ -35,7 +35,7 @@ export default function CollectFromExcelModal({ onClose, onSuccess, onPushToForm
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
 
   const orderKeys = ['buyer', 'style', 'poNo', 'shipDate', 'color', 'orderQty'];
-  const entryKeys = ['date', 'poNo', 'color', 'cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment', 'lineNo'];
+  const entryKeys = ['date', 'poNo', 'color', 'cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment', 'floor'];
 
   const targetKeys = type === 'orders' ? orderKeys : entryKeys;
 
@@ -623,9 +623,9 @@ export default function CollectFromExcelModal({ onClose, onSuccess, onPushToForm
                              tKey.replace(/([A-Z])/g, ' $1')}
                             <span className={cn(
                               "px-1 rounded-sm", 
-                              mapping[tKey] ? "text-success bg-success/10" : (tKey === 'lineNo' || ['cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment'].includes(tKey) ? "text-muted bg-white/5" : "text-danger bg-danger/10 underline underline-offset-2")
+                              mapping[tKey] ? "text-success bg-success/10" : (tKey === 'floor' || ['cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment'].includes(tKey) ? "text-muted bg-white/5" : "text-danger bg-danger/10 underline underline-offset-2")
                             )}>
-                              {mapping[tKey] ? 'SYNC' : (tKey === 'lineNo' || ['cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment'].includes(tKey) ? 'OPTIONAL' : 'REQUIRED')}
+                              {mapping[tKey] ? 'SYNC' : (tKey === 'floor' || ['cut', 'sewOut', 'washR', 'finIn', 'finOut', 'poly', 'shipment'].includes(tKey) ? 'OPTIONAL' : 'REQUIRED')}
                             </span>
                           </label>
                           <select 

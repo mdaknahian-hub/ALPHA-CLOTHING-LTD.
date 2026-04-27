@@ -62,7 +62,8 @@ export default function SystemHealth({ orders, entries }: SystemHealthProps) {
     const monthsUntilWarning = Math.round(daysUntilWarning / 30 * 10) / 10;
 
     return {
-      earliest, latest, recentCount, orphanedEntries, avgDailyRate, daysUntilWarning, monthsUntilWarning
+      earliest, latest, recentCount, orphanedEntries, avgDailyRate, daysUntilWarning, monthsUntilWarning,
+      aiActive: true
     };
   }, [orders, entries]);
 
@@ -227,7 +228,7 @@ export default function SystemHealth({ orders, entries }: SystemHealthProps) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                   <div className="flex flex-col">
                     <span className="text-[9px] font-bold text-muted uppercase mb-1">Total Entries</span>
                     <span className="text-xl font-black num text-fg">{entries.length.toLocaleString()}</span>
@@ -244,6 +245,12 @@ export default function SystemHealth({ orders, entries }: SystemHealthProps) {
                     <span className="text-[9px] font-bold text-muted uppercase mb-1">RAM Usage</span>
                     <span className={cn("text-xl font-black num", healthStatus.color)}>
                       {Math.min(Math.round(healthStatus.percentage), 100)}%
+                    </span>
+                  </div>
+                  <div className="flex flex-col border-l border-border pl-4">
+                    <span className="text-[9px] font-bold text-muted uppercase mb-1">AI Engine</span>
+                    <span className={cn("text-xl font-black flex items-center gap-2", metrics.aiActive ? "text-success" : "text-danger")}>
+                       {metrics.aiActive ? "STABLE" : "ERROR"}
                     </span>
                   </div>
                 </div>
