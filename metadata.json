@@ -1,6 +1,6 @@
 {
-  "name": "ALPHA CLOTHING LTD. ",
-  "description": "Daily Production Report (DPR) and WIP management system for Alpha Clothing Ltd. Features include real-time tracking, AI-powered reports, and Firebase integration.",
+  "name": "স্মার্ট বাকি খাতা - Smart Credit Ledger",
+  "description": "দোকানের ডিজিটাল বাকি খাতা - গ্রাহক, বাকি, জমা ও লেজার ব্যবস্থাপনা। React + Tailwind + Express + SQLite + JWT",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

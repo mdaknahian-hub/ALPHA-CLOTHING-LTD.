@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+server/ledger.db
+server/ledger-memory.json
+server/*.db
+client/dist/
+client/node_modules/
