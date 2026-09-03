@@ -6,8 +6,12 @@ import {defineConfig, loadEnv} from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
+  // For GitHub Pages: base is repo name
+
   const env = loadEnv(mode, '.', '');
+  const isGitHubPages = process.env.GITHUB_ACTIONS === 'true';
   return {
+    base: isGitHubPages ? '/ALPHA-CLOTHING-LTD./' : '/',
     plugins: [
       react(), 
       tailwindcss(),
