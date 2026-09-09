@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Alpha Finance — Family Finance Manager</title>
+<meta name="description" content="Premium shared finance manager for two members — dashboard, transactions, budgets, savings goals and reports.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ══════════════════ LOGIN SCREEN ══════════════════ -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-blobs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <div class="login-card">
+    <!-- Brand side -->
+    <div class="login-brand">
+      <div class="brand-logo">৳</div>
+      <h1>Alpha&nbsp;Finance</h1>
+      <p class="brand-tag" data-i18n="login.tagline">Two members. One ledger. Total control.</p>
+      <ul class="brand-feats">
+        <li><span class="bf-ico">👥</span><span data-i18n="login.feat1">Shared access for 2 members — everyone sees everything</span></li>
+        <li><span class="bf-ico">📊</span><span data-i18n="login.feat2">Dashboard with live charts &amp; insights</span></li>
+        <li><span class="bf-ico">🎯</span><span data-i18n="login.feat3">Budgets &amp; savings goals that keep you on track</span></li>
+        <li><span class="bf-ico">🔐</span><span data-i18n="login.feat4">Gmail / mobile login with secure PIN</span></li>
+      </ul>
+    </div>
+
+    <!-- Form side -->
+    <div class="login-form-wrap">
+      <div class="login-top-actions">
+        <button class="icon-btn" data-action="lang-toggle" title="Language / ভাষা"><span class="ico">🌐</span><span class="lang-label" id="loginLangLabel">EN</span></button>
+        <button class="icon-btn" data-action="theme-toggle" title="Theme"><span id="loginThemeIcon">🌙</span></button>
+      </div>
+
+      <form id="loginForm" autocomplete="off">
+        <h2 data-i18n="login.welcome">Welcome back 👋</h2>
+        <p class="login-sub" data-i18n="login.subtitle">Sign in with your Gmail or mobile number</p>
+
+        <label class="field">
+          <span data-i18n="login.identifier">Gmail or Mobile Number</span>
+          <div class="input-wrap">
+            <span class="input-lead">✉️</span>
+            <input id="loginIdentifier" type="text" placeholder="member1@gmail.com  /  01710-000001" data-i18n-ph="login.identifierPh">
+          </div>
+        </label>
+
+        <label class="field">
+          <span data-i18n="login.pin">PIN</span>
+          <div class="input-wrap">
+            <span class="input-lead">🔑</span>
+            <input id="loginPin" type="password" inputmode="numeric" maxlength="6" placeholder="••••" data-i18n-ph="login.pinPh">
+            <button type="button" class="input-icon" data-action="toggle-pin" id="pinEye" title="Show/Hide">👁</button>
+          </div>
+        </label>
+
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn"><span data-i18n="login.btn">Sign In</span></button>
+
+        <div class="divider"><span data-i18n="login.or">or</span></div>
+
+        <button type="button" class="btn btn-google btn-block" data-action="google-login">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.3h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.7 2.9c2.3-2.1 3.7-5.2 3.7-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 7.9-2.9l-3.7-2.9c-1 .7-2.4 1.2-4.2 1.2-3.2 0-6-2.2-7-5.1L1.2 17.2C3.2 21.2 7.3 24 12 24z"/><path fill="#FBBC05" d="M5 14.3c-.3-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.2 6.8C.4 8.4 0 10.1 0 12s.4 3.6 1.2 5.2L5 14.3z"/><path fill="#EA4335" d="M12 4.7c2.3 0 3.8 1 4.7 1.8l3.3-3.2C18 1.6 15.2 0 12 0 7.3 0 3.2 2.8 1.2 6.8L5 9.7c1-2.9 3.8-5 7-5z"/></svg>
+          <span data-i18n="login.google">Continue with Google</span>
+          <em class="tag-demo">demo</em>
+        </button>
+
+        <div class="demo-hint" id="demoHint"></div>
+      </form>
+    </div>
+  </div>
+
+  <p class="login-foot" data-i18n="login.foot">🔒 Data stays on this device — both members share one ledger.</p>
+</div>
+
+<!-- ══════════════════ APP SHELL ══════════════════ -->
+<div id="app" class="app hidden">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand">
+      <div class="brand-logo sm">৳</div>
+      <div class="side-brand-txt"><strong>Alpha Finance</strong><span id="sideFamily">Family Ledger</span></div>
+    </div>
+
+    <nav class="side-nav" id="sideNav">
+      <button class="nav-item" data-action="nav" data-page="dashboard">
+        <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+        <span data-i18n="nav.dashboard">Dashboard</span>
+      </button>
+      <button class="nav-item" data-action="nav" data-page="transactions">
+        <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg>
+        <span data-i18n="nav.transactions">Transactions</span>
+      </button>
+      <button class="nav-item" data-action="nav" data-page="budget">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/></svg>
+        <span data-i18n="nav.budget">Budget</span>
+      </button>
+      <button class="nav-item" data-action="nav" data-page="goals">
+        <svg viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h11l-2.5 4L16 12H5"/></svg>
+        <span data-i18n="nav.goals">Savings Goals</span>
+      </button>
+      <button class="nav-item" data-action="nav" data-page="reports">
+        <svg viewBox="0 0 24 24"><path d="M4 20v-7M9.3 20V6M14.7 20v-10M20 20V9"/><path d="M2.5 20h19"/></svg>
+        <span data-i18n="nav.reports">Reports</span>
+      </button>
+      <button class="nav-item" data-action="nav" data-page="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span data-i18n="nav.settings">Settings</span>
+      </button>
+    </nav>
+
+    <button class="side-user" data-action="nav" data-page="settings" id="sideUser"></button>
+  </aside>
+  <div class="sidebar-backdrop" id="sidebarBackdrop" data-action="close-sidebar"></div>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn hamburger" data-action="open-sidebar" aria-label="Menu">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <h2 id="pageTitle">Dashboard</h2>
+      <div class="topbar-actions">
+        <button class="btn btn-primary btn-sm topbar-add" data-action="add-tx">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="topbar.addTx">Add Transaction</span>
+        </button>
+        <button class="icon-btn" data-action="lang-toggle" title="Language / ভাষা"><span class="ico">🌐</span><span class="lang-label" id="topLangLabel">EN</span></button>
+        <button class="icon-btn" data-action="theme-toggle" title="Theme"><span id="themeIcon">🌙</span></button>
+        <div class="avatar-wrap" id="avatarWrap">
+          <button class="avatar" data-action="avatar-menu" id="topAvatar" title="Account"></button>
+          <div class="dropdown" id="avatarDropdown">
+            <div class="dropdown-head" id="dropdownHead"></div>
+            <button class="dropdown-item" data-action="nav" data-page="settings">⚙️ <span data-i18n="menu.settings">Settings</span></button>
+            <button class="dropdown-item" data-action="switch-user">🔄 <span data-i18n="menu.switchUser">Switch User</span></button>
+            <button class="dropdown-item danger" data-action="logout">⏻ <span data-i18n="menu.logout">Log Out</span></button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="pages" id="pages">
+
+      <!-- ═══ DASHBOARD ═══ -->
+      <section class="page" id="page-dashboard">
+        <div class="dash-head">
+          <div>
+            <h3 class="greeting" id="dashGreeting">Good morning!</h3>
+            <p class="dash-date" id="dashDate"></p>
+          </div>
+          <div class="quick-actions">
+            <button class="btn btn-soft-green btn-sm" data-action="add-income">＋ <span data-i18n="dash.addIncome">Income</span></button>
+            <button class="btn btn-soft-red btn-sm" data-action="add-expense">－ <span data-i18n="dash.addExpense">Expense</span></button>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-ico ico-violet">💰</div>
+            <div class="stat-txt"><span data-i18n="stat.balance">Total Balance</span><strong id="statBalance">—</strong></div>
+            <span class="delta" id="statBalanceDelta"></span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-ico ico-green">📈</div>
+            <div class="stat-txt"><span data-i18n="stat.income">Income (This Month)</span><strong id="statIncome" class="c-green">—</strong></div>
+            <span class="delta" id="statIncomeDelta"></span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-ico ico-red">📉</div>
+            <div class="stat-txt"><span data-i18n="stat.expense">Expense (This Month)</span><strong id="statExpense" class="c-red">—</strong></div>
+            <span class="delta" id="statExpenseDelta"></span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-ico ico-blue">🏦</div>
+            <div class="stat-txt"><span data-i18n="stat.savings">Savings (This Month)</span><strong id="statSavings">—</strong></div>
+            <span class="delta" id="statSavingsDelta"></span>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="chart.cashflow">Cash Flow — Last 6 Months</h3></div>
+            <div class="bars" id="dashBar"></div>
+            <div class="chart-legend">
+              <span><i class="dot dot-green"></i><span data-i18n="common.income">Income</span></span>
+              <span><i class="dot dot-red"></i><span data-i18n="common.expense">Expense</span></span>
+            </div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="chart.expenseByCat">Expenses by Category</h3></div>
+            <div class="donut-wrap" id="dashDonut"></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <h3>🎯 <span data-i18n="dash.budgets">Budgets</span></h3>
+              <button class="link-btn" data-action="goto" data-page="budget"><span data-i18n="dash.viewAll">View all</span> →</button>
+            </div>
+            <div id="dashBudgets"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>🧾 <span data-i18n="dash.recentTx">Recent Transactions</span></h3>
+              <button class="link-btn" data-action="goto" data-page="transactions"><span data-i18n="dash.viewAll">View all</span> →</button>
+            </div>
+            <div id="dashRecent"></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">
+              <h3>🏆 <span data-i18n="dash.goals">Savings Goals</span></h3>
+              <button class="link-btn" data-action="goto" data-page="goals"><span data-i18n="dash.viewAll">View all</span> →</button>
+            </div>
+            <div id="dashGoals"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>👥 <span data-i18n="dash.members">Members — This Month</span></h3></div>
+            <div id="dashMembers"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ TRANSACTIONS ═══ -->
+      <section class="page" id="page-transactions">
+        <div class="page-head">
+          <div class="filter-card">
+            <div class="input-wrap grow">
+              <span class="input-lead">🔍</span>
+              <input id="txSearch" type="text" placeholder="Search note, category…" data-i18n-ph="tx.searchPh">
+            </div>
+            <select id="txType" class="sel">
+              <option value="" data-i18n="common.allTypes">All Types</option>
+              <option value="income" data-i18n="common.income">Income</option>
+              <option value="expense" data-i18n="common.expense">Expense</option>
+            </select>
+            <select id="txCategory" class="sel"></select>
+            <select id="txMember" class="sel"></select>
+            <select id="txMethod" class="sel">
+              <option value="" data-i18n="tx.allMethods">All Methods</option>
+            </select>
+            <div class="date-pair">
+              <input id="txFrom" type="date" class="sel" title="From">
+              <input id="txTo" type="date" class="sel" title="To">
+            </div>
+            <button class="btn btn-ghost btn-sm" data-action="tx-clear">✕ <span data-i18n="tx.clear">Clear</span></button>
+          </div>
+        </div>
+
+        <div class="tx-summary" id="txSummary"></div>
+        <div id="txList"></div>
+      </section>
+
+      <!-- ═══ BUDGET ═══ -->
+      <section class="page" id="page-budget">
+        <div class="page-head">
+          <div class="head-title"><h3>🎯 <span data-i18n="budget.title">Monthly Budgets</span></h3><p data-i18n="budget.subtitle">Category limits for this month</p></div>
+          <button class="btn btn-primary btn-sm" data-action="add-budget">＋ <span data-i18n="budget.add">Add Budget</span></button>
+        </div>
+        <div id="budgetOverall"></div>
+        <div class="grid-cards" id="budgetGrid"></div>
+      </section>
+
+      <!-- ═══ GOALS ═══ -->
+      <section class="page" id="page-goals">
+        <div class="page-head">
+          <div class="head-title"><h3>🏆 <span data-i18n="goals.title">Savings Goals</span></h3><p data-i18n="goals.subtitle">Dream together, save together</p></div>
+          <button class="btn btn-primary btn-sm" data-action="add-goal">＋ <span data-i18n="goals.add">Add Goal</span></button>
+        </div>
+        <div id="goalsSummary"></div>
+        <div class="grid-cards" id="goalGrid"></div>
+      </section>
+
+      <!-- ═══ REPORTS ═══ -->
+      <section class="page" id="page-reports">
+        <div class="page-head">
+          <div class="head-title"><h3>📊 <span data-i18n="reports.title">Reports &amp; Insights</span></h3><p data-i18n="reports.subtitle">Know where every taka goes</p></div>
+          <div class="report-controls">
+            <input id="reportMonth" type="month" class="sel">
+            <div class="seg" id="reportUserChips"></div>
+            <button class="btn btn-ghost btn-sm" data-action="report-export-csv">⬇ <span data-i18n="reports.exportCsv">Export CSV</span></button>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="reportSummary"></div>
+
+        <div class="grid-2">
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="reports.trend">6-Month Trend</h3></div>
+            <div class="bars" id="reportTrend"></div>
+            <div class="chart-legend">
+              <span><i class="dot dot-green"></i><span data-i18n="common.income">Income</span></span>
+              <span><i class="dot dot-red"></i><span data-i18n="common.expense">Expense</span></span>
+            </div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="reports.savingsLine">Monthly Savings</h3></div>
+            <div class="line-wrap" id="reportLine"></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="chart.expenseByCat">Expenses by Category</h3></div>
+            <div class="donut-wrap" id="reportDonut"></div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-head"><h3 data-i18n="reports.daily">Daily Spending</h3></div>
+            <div class="bars" id="reportDaily"></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3 data-i18n="reports.incomeSources">Income Sources</h3></div>
+            <div id="reportIncome"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3 data-i18n="reports.topExpenses">Top 5 Expenses</h3></div>
+            <div id="reportTop"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ SETTINGS ═══ -->
+      <section class="page" id="page-settings">
+        <div class="page-head">
+          <div class="head-title"><h3>⚙️ <span data-i18n="settings.title">Settings</span></h3><p data-i18n="settings.subtitle">Your app, your rules</p></div>
+        </div>
+
+        <div class="grid-2 settings-grid">
+          <div class="card">
+            <div class="card-head"><h3>👨‍👩‍👧 <span data-i18n="settings.family">Family</span></h3></div>
+            <label class="field"><span data-i18n="settings.familyName">Ledger / Family Name</span>
+              <div class="input-wrap"><input id="familyNameInput" type="text" maxlength="40"></div>
+            </label>
+            <label class="field"><span data-i18n="settings.currency">Currency</span>
+              <select id="currencySelect" class="sel"></select>
+            </label>
+            <p class="hint" data-i18n="settings.sharedNote">Both members share the same ledger, budgets and goals.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>🎨 <span data-i18n="settings.preferences">Preferences</span></h3></div>
+            <div class="field"><span data-i18n="settings.theme">Theme</span>
+              <div class="seg">
+                <button class="seg-btn" data-action="set-theme" data-val="dark">🌙 <span data-i18n="settings.dark">Dark</span></button>
+                <button class="seg-btn" data-action="set-theme" data-val="light">☀️ <span data-i18n="settings.light">Light</span></button>
+              </div>
+            </div>
+            <div class="field"><span data-i18n="settings.language">Language</span>
+              <div class="seg">
+                <button class="seg-btn" data-action="set-lang" data-val="en">English</button>
+                <button class="seg-btn" data-action="set-lang" data-val="bn">বাংলা</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>👥 <span data-i18n="settings.profiles">Member Profiles &amp; Login</span></h3></div>
+          <div class="profiles-grid" id="profilesWrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>💾 <span data-i18n="settings.data">Data — Backup &amp; Restore</span></h3></div>
+          <div class="data-btns">
+            <button class="btn btn-ghost" data-action="export-json">⬇ <span data-i18n="settings.exportJson">Export JSON Backup</span></button>
+            <button class="btn btn-ghost" data-action="export-csv">⬇ <span data-i18n="settings.exportCsv">Export Transactions CSV</span></button>
+            <button class="btn btn-ghost" data-action="import-json">⬆ <span data-i18n="settings.importJson">Import Backup</span></button>
+            <button class="btn btn-ghost" data-action="load-demo">🎲 <span data-i18n="settings.loadDemo">Load Demo Data</span></button>
+            <button class="btn btn-danger-ghost" data-action="clear-all">🗑 <span data-i18n="settings.clearAll">Clear All Data</span></button>
+          </div>
+          <input type="file" id="importFile" accept=".json,application/json" class="hidden">
+        </div>
+
+        <div class="card about-card">
+          <div class="card-head"><h3>ℹ️ Alpha Finance</h3></div>
+          <p data-i18n="settings.aboutText">A shared finance manager for two members. Login with Gmail or mobile — both partners see and manage the same data. Data is stored locally on this device; use Backup to move it between devices.</p>
+          <p class="ver">v1.0.0 · Made with ❤</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Bottom nav (mobile) -->
+  <nav class="bottom-nav">
+    <button class="bn-item" data-action="nav" data-page="dashboard"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span data-i18n="nav.dashboard">Dashboard</span></button>
+    <button class="bn-item" data-action="nav" data-page="transactions"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg><span data-i18n="nav.transactions">Transactions</span></button>
+    <button class="bn-fab" data-action="add-tx" aria-label="Add"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="bn-item" data-action="nav" data-page="budget"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/></svg><span data-i18n="nav.budget">Budget</span></button>
+    <button class="bn-item" data-action="nav" data-page="reports"><svg viewBox="0 0 24 24"><path d="M4 20v-7M9.3 20V6M14.7 20v-10M20 20V9"/><path d="M2.5 20h19"/></svg><span data-i18n="nav.reports">Reports</span></button>
+  </nav>
+</div>
+
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+<div id="chartTooltip" class="chart-tooltip"></div>
+
+<script src="js/i18n.js"></script>
+<script src="js/store.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/pages.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
