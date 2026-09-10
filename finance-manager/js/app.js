@@ -71,6 +71,7 @@ function applyTheme(theme) {
 function applyLanguage(lang) {
   const d = getData();
   d.settings.language = lang === "bn" ? "bn" : "en";
+  touchSettings();
   saveData();
   setLang(d.settings.language);
   applyI18n(document);
@@ -116,6 +117,7 @@ function renderCurrentPage() {
 function commit() {
   saveData();
   renderCurrentPage();
+  cloudMarkDirty();
 }
 
 /* ─────────── Login / auth ─────────── */
@@ -509,8 +511,8 @@ document.addEventListener("click", e => {
     case "modal-close": closeTopModal(); break;
 
     case "lang-toggle": { const d = getData(); applyLanguage(d.settings.language === "bn" ? "en" : "bn"); break; }
-    case "theme-toggle": { const d = getData(); const th = d.settings.theme === "dark" ? "light" : "dark"; d.settings.theme = th; saveData(); applyTheme(th); break; }
-    case "set-theme": { const th = el.getAttribute("data-val"); getData().settings.theme = th; saveData(); applyTheme(th); renderSettings(); break; }
+    case "theme-toggle": { const d = getData(); const th = d.settings.theme === "dark" ? "light" : "dark"; d.settings.theme = th; touchSettings(); saveData(); applyTheme(th); break; }
+    case "set-theme": { const th = el.getAttribute("data-val"); getData().settings.theme = th; touchSettings(); saveData(); applyTheme(th); renderSettings(); break; }
     case "set-lang": applyLanguage(el.getAttribute("data-val")); renderSettings(); break;
     case "toggle-pin": {
       const inp = document.getElementById("loginPin");
@@ -519,7 +521,11 @@ document.addEventListener("click", e => {
     }
 
     case "login": break; /* handled by form submit */
-    case "google-login": googleModal(); break;
+    case "google-login":
+      /* real Google sign-in when cloud is configured, demo picker otherwise */
+      if (cloudConfigured()) cloudGoogleLogin();
+      else googleModal();
+      break;
     case "logout": logout(); break;
     case "switch-user": {
       const other = getData().users.find(u => u.id !== getSession());
@@ -558,6 +564,19 @@ document.addEventListener("click", e => {
 
     case "report-user": REPORT.userId = id; renderReports(); break;
 
+    case "cloud-menu": if (cloudConfigured()) cloudStatusModal(); else cloudConnectModal(); break;
+    case "cloud-connect": closeAllModals(); cloudConnectModal(); break;
+    case "cloud-sync-now": cloudPushNow(); toast(t("toast.cloudSynced"), "success"); break;
+    case "cloud-disconnect": cloudDisconnect(); renderCloudBox(); break;
+    case "cloud-reauth": cloudReauth().then(() => renderCloudBox()); break;
+    case "cloud-copy-code": {
+      const c = cloudCfg();
+      if (c && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(c.familyId).then(() => toast(t("toast.copied"), "success")).catch(() => toast("📋 " + c.familyId, "info"));
+      } else if (c) toast("📋 " + c.familyId, "info");
+      break;
+    }
+
     case "tx-clear":
       TXF.search = ""; TXF.type = ""; TXF.category = ""; TXF.userId = ""; TXF.method = ""; TXF.from = ""; TXF.to = "";
       ["txSearch", "txType", "txCategory", "txMember", "txMethod", "txFrom", "txTo"].forEach(i => { const n = document.getElementById(i); if (n) n.value = ""; });
@@ -592,12 +611,12 @@ document.addEventListener("change", e => {
   else if (id === "reportMonth") { REPORT.ym = e.target.value || curYM(); renderReports(); }
   else if (id === "familyNameInput") {
     getData().settings.familyName = e.target.value.trim() || "Alpha Family";
-    saveData(); document.getElementById("sideFamily").textContent = getData().settings.familyName;
+    touchSettings(); saveData(); document.getElementById("sideFamily").textContent = getData().settings.familyName;
     toast(t("toast.saved"), "success");
   }
   else if (id === "currencySelect") {
     const c = CURRENCIES.find(x => x.code === e.target.value);
-    if (c) { getData().settings.currency = c; saveData(); toast(t("toast.saved"), "success"); renderCurrentPage(); }
+    if (c) { getData().settings.currency = c; touchSettings(); saveData(); toast(t("toast.saved"), "success"); renderCurrentPage(); }
   }
   else if (id === "importFile") {
     if (e.target.files && e.target.files[0]) handleImportFile(e.target.files[0]);
@@ -654,6 +673,8 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     doLogin(document.getElementById("loginIdentifier").value, document.getElementById("loginPin").value);
   });
+
+  cloudInit();
 
   if (getSession()) enterApp();
 });

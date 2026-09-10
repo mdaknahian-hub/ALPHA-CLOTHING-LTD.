@@ -1,0 +1,49 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════
+// Alpha Finance — Firestore security rules
+// One document per family ledger: ledgers/{familyCode}
+//   members: list of the 2 authorized Gmail addresses (lowercase)
+//   data:    the shared ledger JSON (transactions, budgets, goals…)
+//   updatedAt / updatedBy: sync metadata
+//
+// Deploy: Firebase Console → Firestore Database → Rules → paste → Publish
+// (If the project uses a named database, publish to that database.)
+//
+// ⚠️ If this database is SHARED with another app (e.g. the garment
+// production tracker in this repo), do NOT replace its rules — instead
+// copy only the `match /ledgers/{ledgerId} { … }` block into the
+// existing rules file, keeping the other collections' blocks intact.
+// ═══════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /ledgers/{ledgerId} {
+      // both members can read their shared ledger
+      allow read: if request.auth != null
+                  && request.auth.token.email != null
+                  && request.auth.token.email in resource.data.members;
+
+      // creator must authorize themselves (and at most the 2 members)
+      allow create: if request.auth != null
+                  && request.auth.token.email != null
+                  && request.auth.token.email in request.resource.data.members
+                  && request.resource.data.members.size() <= 2;
+
+      // only the authorized members can update
+      allow update: if request.auth != null
+                  && request.auth.token.email != null
+                  && request.auth.token.email in resource.data.members
+                  && request.resource.data.members.size() <= 2;
+
+      // never allow deletion through the client
+      allow delete: if false;
+    }
+
+    // everything else is denied
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

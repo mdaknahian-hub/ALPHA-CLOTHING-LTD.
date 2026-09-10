@@ -224,6 +224,10 @@ function saveData() {
   try { localStorage.setItem(DB_KEY, JSON.stringify(_data)); } catch (e) { /* storage full */ }
 }
 function getData() { return loadData(); }
+/** wholesale replace the dataset (used by cloud sync pull) */
+function replaceData(nd) { _data = nd; migrateData(_data); saveData(); }
+/** bump settings edit timestamp (used by cloud sync conflict resolution) */
+function touchSettings() { getData().settings._editedAt = Date.now(); }
 
 /* ─── Session ─── */
 function getSession() {
@@ -306,7 +310,7 @@ function addTx(tx) {
 }
 function updateTx(id, patch) {
   const x = getData().transactions.find(v => v.id === id);
-  if (x) Object.assign(x, patch);
+  if (x) { Object.assign(x, patch); x._editedAt = Date.now(); }
   saveData();
 }
 function deleteTx(id) {
@@ -321,7 +325,7 @@ function addBudget(catId, limit) {
 }
 function updateBudget(id, patch) {
   const b = getData().budgets.find(v => v.id === id);
-  if (b) Object.assign(b, patch);
+  if (b) { Object.assign(b, patch); b._editedAt = Date.now(); }
   saveData();
 }
 function deleteBudget(id) {
@@ -335,7 +339,7 @@ function addGoal(goal) {
 }
 function updateGoal(id, patch) {
   const g = getData().goals.find(v => v.id === id);
-  if (g) Object.assign(g, patch);
+  if (g) { Object.assign(g, patch); g._editedAt = Date.now(); }
   saveData();
 }
 function deleteGoal(id) {
@@ -345,7 +349,7 @@ function deleteGoal(id) {
 }
 function updateUser(id, patch) {
   const u = getData().users.find(v => v.id === id);
-  if (u) Object.assign(u, patch);
+  if (u) { Object.assign(u, patch); u._editedAt = Date.now(); }
   saveData();
 }
 

@@ -63,9 +63,9 @@
         <div class="divider"><span data-i18n="login.or">or</span></div>
 
         <button type="button" class="btn btn-google btn-block" data-action="google-login">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.3h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.7 2.9c2.3-2.1 3.7-5.2 3.7-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 7.9-2.9l-3.7-2.9c-1 .7-2.4 1.2-4.2 1.2-3.2 0-6-2.2-7-5.1L1.2 17.2C3.2 21.2 7.3 24 12 24z"/><path fill="#FBBC05" d="M5 14.3c-.3-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.2 6.8C.4 8.4 0 10.1 0 12s.4 3.6 1.2 5.2L5 14.3z"/><path fill="#EA4335" d="M12 4.7c2.3 0 3.8 1 4.7 1.8l3.3-3.2C18 1.6 15.2 0 12 0 7.3 0 3.2 2.8 1.2 6.8L5 9.7c1-2.9 3.8-5 7-5z"/></svg>
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.2H12v4.3h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.7 2.9c2.3-2.1 3.7-5.2 3.7-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 7.9-2.9l-3.7-2.9c-1 .7-2.4 1.2-4.2 1.2-3.2 0-6-2.2-7-5.1L1.2 17.2C3.2 21.2 7.3 24 12 24z"/><path fill="#FBBC05" d="M5 14.3c-.3-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.2 6.8C.4 8.4 0 10.1 0 12s.4 3.6 1.2 5.2L5 14.3z"/><path fill="#EA4335" d="M12 4.7c2.3 0 3.8 1 4.7 1.8l3.3-3.2C18 1.6 15.2 0 12 0 7.3 0 3.2 2.8 1.2 6.8L5 9.7c1-2.9 3.8-5 7-5z"/></svg>
           <span data-i18n="login.google">Continue with Google</span>
-          <em class="tag-demo">demo</em>
+          <em class="tag-demo" id="googleTag">demo</em>
         </button>
 
         <div class="demo-hint" id="demoHint"></div>
@@ -127,6 +127,7 @@
         <button class="btn btn-primary btn-sm topbar-add" data-action="add-tx">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="topbar.addTx">Add Transaction</span>
         </button>
+        <button class="icon-btn cloud-btn st-off" data-action="cloud-menu" id="cloudBtn" title="Cloud Sync"><span id="cloudIcon">☁️</span></button>
         <button class="icon-btn" data-action="lang-toggle" title="Language / ভাষা"><span class="ico">🌐</span><span class="lang-label" id="topLangLabel">EN</span></button>
         <button class="icon-btn" data-action="theme-toggle" title="Theme"><span id="themeIcon">🌙</span></button>
         <div class="avatar-wrap" id="avatarWrap">
@@ -368,6 +369,11 @@
         </div>
 
         <div class="card">
+          <div class="card-head"><h3>☁️ <span data-i18n="cloud.cardTitle">Cloud Sync &amp; Real-time Backup</span></h3></div>
+          <div id="cloudStatusBox"></div>
+        </div>
+
+        <div class="card">
           <div class="card-head"><h3>💾 <span data-i18n="settings.data">Data — Backup &amp; Restore</span></h3></div>
           <div class="data-btns">
             <button class="btn btn-ghost" data-action="export-json">⬇ <span data-i18n="settings.exportJson">Export JSON Backup</span></button>
@@ -407,6 +413,7 @@
 <script src="js/store.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/pages.js"></script>
+<script src="js/cloud.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

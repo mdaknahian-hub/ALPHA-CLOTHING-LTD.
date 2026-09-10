@@ -508,6 +508,29 @@ svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width:
 .toast.error { border-left: 3px solid var(--red); }
 .toast.info { border-left: 3px solid var(--blue); }
 
+/* ─────────────── Cloud sync ─────────────── */
+.cloud-btn { position: relative; }
+.cloud-btn::after {
+  content: ""; position: absolute; top: 7px; right: 7px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--muted); opacity: .45;
+}
+.cloud-btn.st-off::after { display: none; }
+.cloud-btn.st-ok::after { background: var(--green); opacity: 1; box-shadow: 0 0 8px var(--green); }
+.cloud-btn.st-syncing::after { background: var(--amber); opacity: 1; animation: cloudPulse 1s infinite; }
+.cloud-btn.st-error::after, .cloud-btn.st-needsLogin::after { background: var(--red); opacity: 1; box-shadow: 0 0 8px var(--red); }
+@keyframes cloudPulse { 50% { transform: scale(1.6); opacity: .4; } }
+.cloud-steps {
+  font-size: 12.8px; color: var(--muted); line-height: 1.8; background: var(--input-bg);
+  border: 1px dashed var(--border-strong); border-radius: 14px; padding: 12px 15px;
+}
+.cloud-steps b { color: var(--accent); margin-right: 2px; }
+.ta {
+  width: 100%; background: var(--input-bg); border: 1px solid var(--border-strong); border-radius: 13px;
+  padding: 11px 13px; outline: none; color: var(--text); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; resize: vertical;
+}
+.ta:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99, 102, 241, .18); }
+
 /* ─────────────── Bottom nav (mobile) ─────────────── */
 .bottom-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 80;

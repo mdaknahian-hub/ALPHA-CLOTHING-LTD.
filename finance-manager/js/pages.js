@@ -350,6 +350,9 @@ function renderSettings() {
     '<div class="pc-btns"><button class="btn btn-ghost btn-sm" data-action="edit-profile" data-id="' + u.id + '">✏️ ' + t("settings.editProfile") + "</button>" +
     '<button class="btn btn-ghost btn-sm" data-action="change-pin" data-id="' + u.id + '">🔑 ' + t("settings.changePin") + "</button></div></div>"
   ).join("");
+
+  /* cloud sync box (cloud.js loaded before first render) */
+  if (typeof renderCloudBox === "function") renderCloudBox();
 }
 
 /* ═══════════ Central dispatch ═══════════ */
